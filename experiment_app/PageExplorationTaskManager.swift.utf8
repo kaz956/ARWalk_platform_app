@@ -1,0 +1,29 @@
+import Foundation
+
+struct ExplorePage: Identifiable {
+    let id: String
+    let title: String
+    let body: String
+    let links: [String]
+}
+
+struct PageExplorationChallenge {
+    let targetTitle: String
+    let currentPage: ExplorePage
+    let spawnedAt: Date
+    let expiresAt: Date
+}
+
+/// Wikipedia 鬚ｨ縺ｮ繝ｪ繝ｳ繧ｯ謗｢邏｢繧ｿ繧ｹ繧ｯ
+final class PageExplorationTaskManager: ObservableObject, ExperimentalSubTask {
+    @Published private(set) var currentChallenge: PageExplorationChallenge?
+    @Published private(set) var lastResult: Bool? = nil
+
+    private let timeLimit: TimeInterval = 9999.0
+    private var eventLogger: ((TaskEventPayload) -> Void)?
+    private var isRunning = false
+    private var nextChallengeDate: Date?
+
+    @Published private(set) var scrollLine: Int = 0
+
+    // 蜈ｨ繝壹
