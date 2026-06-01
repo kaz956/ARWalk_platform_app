@@ -18,6 +18,7 @@ struct ExperimentView: View {
                 experimentControls
                 // taskConfigControls
                 panelControls
+                optimalZoneControls
                 peopleControls
             }
             .padding()
@@ -282,72 +283,144 @@ struct ExperimentView: View {
                 }
                 .buttonStyle(.bordered)
             }
+            
+            HStack(spacing: 8) {
+                Text("プリセット保存/読込:")
+                    .font(.subheadline)
+                ForEach(["A", "B", "C"], id: \.self) { presetName in
+                    HStack(spacing: 4) {
+                        Button(action: {
+                            panelModel.loadPreset(name: presetName)
+                        }) {
+                            Text(presetName)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(panelModel.presets[presetName] == nil)
+                        
+                        Button(action: {
+                            panelModel.savePreset(name: presetName)
+                        }) {
+                            Image(systemName: "square.and.arrow.down")
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundColor(.blue)
+                    }
+                }
+            }
+            .padding(.bottom, 8)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("追従パターン (Tracking Mode)")
+                    .font(.subheadline.bold())
+                Picker("追従パターン", selection: $panelModel.trackingMode) {
+                    ForEach(PanelModel.HUDTrackingMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                
+                if panelModel.trackingMode == .snapFollow {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(String(format: "スナップ閾値角度: %.1f°", panelModel.snapThresholdDegrees))
+                            .font(.footnote)
+                        Slider(value: $panelModel.snapThresholdDegrees, in: 10.0...90.0, step: 1.0)
+                    }
+                    .padding(.top, 4)
+                }
+            }
+            .padding(.bottom, 8)
 
             ForEach($panelModel.panels) { $panel in
-                if panel.id == "Input" {
+                DisclosureGroup {
                     VStack(alignment: .leading, spacing: 8) {
-                    Text(panel.id)
-                        .font(.subheadline)
-                        .bold()
-
-                    Toggle("表示", isOn: $panel.isVisible)
-                    ColorPicker("色", selection: $panel.color)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("透過度")
-                            .font(.subheadline)
-                        Picker("透過度", selection: Binding(
-                            get: {
-                                if panel.opacity <= 0.25 { return 100 }
-                                else if panel.opacity >= 0.75 { return 0 }
-                                else { return 50 }
-                            },
-                            set: { newValue in
-                                if newValue == 0 { panel.opacity = 1.0 }
-                                else if newValue == 50 { panel.opacity = 0.5 }
-                                else { panel.opacity = 0.0 }
+                        Toggle("表示", isOn: $panel.isVisible)
+                        ColorPicker("背景色", selection: $panel.color)
+                        ColorPicker("文字色", selection: $panel.textColor)
+                        
+                        HStack(spacing: 8) {
+                            Text("カラーテーマ:")
+                                .font(.footnote)
+                            
+                            Button("Dark") {
+                                panel.color = .black
+                                panel.textColor = .white
                             }
-                        )) {
-                            Text("0% (不透明)").tag(0)
-                            Text("50% (半透明)").tag(50)
-                            Text("100% (透明)").tag(100)
+                            .buttonStyle(.bordered)
+                            
+                            Button("Light") {
+                                panel.color = .white
+                                panel.textColor = .black
+                            }
+                            .buttonStyle(.bordered)
+                            
+                            Button("Contrast") {
+                                panel.color = .yellow
+                                panel.textColor = .black
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .pickerStyle(.segmented)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("透過度")
+                                .font(.subheadline)
+                            Slider(value: Binding(
+                                get: { Float(panel.opacity) },
+                                set: { panel.opacity = Double($0) }
+                            ), in: 0.0...1.0)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(String(format: "Yaw (左右): %.1f°", panel.angleX))
+                            Slider(value: $panel.angleX, in: -90...90, step: 1.0)
+
+                            Text(String(format: "Pitch (上下): %.1f°", panel.angleY))
+                            Slider(value: $panel.angleY, in: -90...90, step: 1.0)
+
+                            Text(String(format: "距離 (Z): %.2fm", panel.distanceZ))
+                            Slider(value: $panel.distanceZ, in: 0.5...10.0, step: 0.1)
+
+                            HStack {
+                                Text(String(format: "アスペクト比 (横/縦): %.2f", panel.aspectRatio))
+                                Spacer()
+                                Button(action: {
+                                    panel.aspectRatio = 1.0 / panel.aspectRatio
+                                }) {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                        .foregroundColor(.blue)
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                            Slider(value: $panel.aspectRatio, in: 0.25...4.0, step: 0.05)
+                                .padding(.bottom, 4)
+
+                            Text(String(format: "視野角 (サイズ): %.1f°", panel.vofDegrees))
+                            Slider(value: $panel.vofDegrees, in: 10.0...120.0, step: 1.0)
+
+                            let renderSize = panel.renderSize
+                            Text(String(format: "実寸サイズ %.2f x %.2f m", renderSize.x, renderSize.y))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                
+                            Toggle("すりガラス背景 (Glassmorphism)", isOn: $panel.useGlassmorphism)
+                                .padding(.top, 4)
+                            
+                            if panel.useGlassmorphism {
+                                Text(String(format: "すりガラスの強さ: %.2f", panel.glassRoughness))
+                                    .font(.footnote)
+                                Slider(value: $panel.glassRoughness, in: 0.0...1.0, step: 0.05)
+                            }
+                        }
                     }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Picker("X (左右)", selection: $panel.gridX) {
-                                ForEach(PanelModel.PanelGridX.allCases) { Text($0.rawValue).tag($0) }
-                            }
-                            Picker("Y (上下)", selection: $panel.gridY) {
-                                ForEach(PanelModel.PanelGridY.allCases) { Text($0.rawValue).tag($0) }
-                            }
-                            Picker("Z (奥行)", selection: $panel.gridZ) {
-                                ForEach(PanelModel.PanelGridZ.allCases) { Text($0.rawValue).tag($0) }
-                            }
+                    .padding(.vertical, 4)
+                } label: {
+                    HStack {
+                        Text(panel.id).font(.subheadline).bold()
+                        Spacer()
+                        if panel.isVisible {
+                            Image(systemName: "eye.fill").foregroundColor(.blue)
+                        } else {
+                            Image(systemName: "eye.slash").foregroundColor(.secondary)
                         }
-                        .pickerStyle(.segmented)
-                        .padding(.vertical, 4)
-
-                        Picker("向き", selection: $panel.orientation) {
-                            ForEach(PanelModel.PanelOrientation.allCases) { orientation in
-                                Text(orientation.label).tag(orientation)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        Picker("大きさ", selection: $panel.scalePreset) {
-                            ForEach(PanelModel.PanelScalePreset.allCases) { preset in
-                                Text(preset.label).tag(preset)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        let renderSize = panel.renderSize
-                        Text(String(format: "16:9 固定 %.2f x %.2f m", renderSize.x, renderSize.y))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(10)
@@ -355,9 +428,53 @@ struct ExperimentView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(Color.secondary.opacity(0.3))
                 )
+            }
+        }
+    }
+    
+    private var optimalZoneControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("最適視野角ガイド設定")
+                .font(.headline)
+            
+            Toggle("ガイドを表示する", isOn: $panelModel.optimalZone.isGuideVisible)
+                .padding(.bottom, 8)
+            
+            if panelModel.optimalZone.isGuideVisible {
+                DisclosureGroup("Z座標 (距離: m)") {
+                    VStack {
+                        HStack { Text("下限"); Slider(value: $panelModel.optimalZone.minZ, in: 0.5...10.0, step: 0.1); Text(String(format: "%.2f", panelModel.optimalZone.minZ)) }
+                        HStack { Text("上限"); Slider(value: $panelModel.optimalZone.maxZ, in: 0.5...10.0, step: 0.1); Text(String(format: "%.2f", panelModel.optimalZone.maxZ)) }
+                        HStack { Text("ベース"); Slider(value: $panelModel.optimalZone.baseZ, in: 0.5...10.0, step: 0.1); Text(String(format: "%.2f", panelModel.optimalZone.baseZ)) }
+                    }
+                }
+                
+                DisclosureGroup("Y座標 (Pitch: 度)") {
+                    VStack {
+                        HStack { Text("下限"); Slider(value: $panelModel.optimalZone.minPitch, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.minPitch)) }
+                        HStack { Text("上限"); Slider(value: $panelModel.optimalZone.maxPitch, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.maxPitch)) }
+                        HStack { Text("ベース"); Slider(value: $panelModel.optimalZone.basePitch, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.basePitch)) }
+                    }
+                }
+                
+                DisclosureGroup("X座標 (Yaw: 度)") {
+                    VStack {
+                        HStack { Text("下限"); Slider(value: $panelModel.optimalZone.minYaw, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.minYaw)) }
+                        HStack { Text("上限"); Slider(value: $panelModel.optimalZone.maxYaw, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.maxYaw)) }
+                        HStack { Text("ベース"); Slider(value: $panelModel.optimalZone.baseYaw, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.baseYaw)) }
+                    }
+                }
+                
+                DisclosureGroup("サイズ・視角 (度)") {
+                    VStack {
+                        HStack { Text("下限"); Slider(value: $panelModel.optimalZone.minVoF, in: 10...120, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.minVoF)) }
+                        HStack { Text("上限"); Slider(value: $panelModel.optimalZone.maxVoF, in: 10...120, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.maxVoF)) }
+                        HStack { Text("ベース"); Slider(value: $panelModel.optimalZone.baseVoF, in: 10...120, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.baseVoF)) }
+                    }
                 }
             }
         }
+        .padding(.vertical, 8)
     }
 
     private var peopleControls: some View {
@@ -399,6 +516,30 @@ struct ExperimentView: View {
 
             }
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("歩行者の進行方向")
+                    .font(.subheadline.bold())
+                Picker("進行方向", selection: $panelModel.pedestrianDirectionMode) {
+                    ForEach(PanelModel.PedestrianDirectionMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+            .padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("歩行アルゴリズム")
+                    .font(.subheadline.bold())
+                Picker("アルゴリズム", selection: $panelModel.pedestrianAlgorithm) {
+                    ForEach(PanelModel.PedestrianAlgorithm.allCases) { algo in
+                        Text(algo.rawValue).tag(algo)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+            .padding(.vertical, 4)
+
             VStack(alignment: .leading) {
                 Text(String(format: "移動速度倍率: x%.1f", panelModel.peopleSpeedMultiplier))
                 Slider(value: $panelModel.peopleSpeedMultiplier, in: 0.2...3.0)
@@ -409,33 +550,39 @@ struct ExperimentView: View {
                     .font(.subheadline.bold())
                 Picker("Density", selection: Binding(
                     get: {
-                        if abs(panelModel.peopleSpawnInterval - panelModel.tAB) < 0.1 {
-                            return 0
-                        } else if abs(panelModel.peopleSpawnInterval - panelModel.tCD) < 0.1 {
-                            return 1
-                        } else {
-                            return 2
-                        }
+                        if abs(panelModel.peopleSpawnInterval - panelModel.tA) < 0.1 { return 0 }
+                        else if abs(panelModel.peopleSpawnInterval - panelModel.tB) < 0.1 { return 1 }
+                        else if abs(panelModel.peopleSpawnInterval - panelModel.tC) < 0.1 { return 2 }
+                        else if abs(panelModel.peopleSpawnInterval - panelModel.tD) < 0.1 { return 3 }
+                        else if abs(panelModel.peopleSpawnInterval - panelModel.tE) < 0.1 { return 4 }
+                        else if abs(panelModel.peopleSpawnInterval - panelModel.tF) < 0.1 { return 5 }
+                        else { return 6 }
                     },
                     set: { val in
                         switch val {
-                        case 0: panelModel.peopleSpawnInterval = panelModel.tAB
-                        case 1: panelModel.peopleSpawnInterval = panelModel.tCD
-                        case 2: panelModel.peopleSpawnInterval = panelModel.tEF
+                        case 0: panelModel.peopleSpawnInterval = panelModel.tA
+                        case 1: panelModel.peopleSpawnInterval = panelModel.tB
+                        case 2: panelModel.peopleSpawnInterval = panelModel.tC
+                        case 3: panelModel.peopleSpawnInterval = panelModel.tD
+                        case 4: panelModel.peopleSpawnInterval = panelModel.tE
+                        case 5: panelModel.peopleSpawnInterval = panelModel.tF
                         default: break
                         }
                     }
                 )) {
-                    Text("LOS A/B (Low)").tag(0)
-                    Text("LOS C/D (Medium)").tag(1)
-                    Text("LOS E/F (High)").tag(2)
+                    Text("LOS A").tag(0)
+                    Text("LOS B").tag(1)
+                    Text("LOS C").tag(2)
+                    Text("LOS D").tag(3)
+                    Text("LOS E").tag(4)
+                    Text("LOS F").tag(5)
                 }
                 .pickerStyle(.segmented)
                 
                 Text(String(format: "※目標値 (幅 %.1fm, 速度 %.2fm/s):", width, avgVelocity))
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
-                Text(String(format: "　LOS A/B (0.09 peds/m²): %.1f秒  |  LOS C/D (0.45 peds/m²): %.1f秒  |  LOS E/F (1.33 peds/m²): %.1f秒", panelModel.tAB, panelModel.tCD, panelModel.tEF))
+                Text(String(format: "A: %.1f秒 | B: %.1f秒 | C: %.1f秒 | D: %.1f秒 | E: %.1f秒 | F: %.1f秒", panelModel.tA, panelModel.tB, panelModel.tC, panelModel.tD, panelModel.tE, panelModel.tF))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -641,26 +788,32 @@ private struct LOSCard: View {
 
             Picker("Density", selection: Binding(
                 get: {
-                    if abs(panelModel.peopleSpawnInterval - panelModel.tAB) < 0.1 {
-                        return 0
-                    } else if abs(panelModel.peopleSpawnInterval - panelModel.tCD) < 0.1 {
-                        return 1
-                    } else {
-                        return 2
-                    }
+                    if abs(panelModel.peopleSpawnInterval - panelModel.tA) < 0.1 { return 0 }
+                    else if abs(panelModel.peopleSpawnInterval - panelModel.tB) < 0.1 { return 1 }
+                    else if abs(panelModel.peopleSpawnInterval - panelModel.tC) < 0.1 { return 2 }
+                    else if abs(panelModel.peopleSpawnInterval - panelModel.tD) < 0.1 { return 3 }
+                    else if abs(panelModel.peopleSpawnInterval - panelModel.tE) < 0.1 { return 4 }
+                    else if abs(panelModel.peopleSpawnInterval - panelModel.tF) < 0.1 { return 5 }
+                    else { return 6 }
                 },
                 set: { val in
                     switch val {
-                    case 0: panelModel.peopleSpawnInterval = panelModel.tAB
-                    case 1: panelModel.peopleSpawnInterval = panelModel.tCD
-                    case 2: panelModel.peopleSpawnInterval = panelModel.tEF
+                    case 0: panelModel.peopleSpawnInterval = panelModel.tA
+                    case 1: panelModel.peopleSpawnInterval = panelModel.tB
+                    case 2: panelModel.peopleSpawnInterval = panelModel.tC
+                    case 3: panelModel.peopleSpawnInterval = panelModel.tD
+                    case 4: panelModel.peopleSpawnInterval = panelModel.tE
+                    case 5: panelModel.peopleSpawnInterval = panelModel.tF
                     default: break
                     }
                 }
             )) {
-                Text("LOS A/B (Low)").tag(0)
-                Text("LOS C/D (Medium)").tag(1)
-                Text("LOS E/F (High)").tag(2)
+                Text("LOS A").tag(0)
+                Text("LOS B").tag(1)
+                Text("LOS C").tag(2)
+                Text("LOS D").tag(3)
+                Text("LOS E").tag(4)
+                Text("LOS F").tag(5)
             }
             .pickerStyle(.segmented)
             .frame(minWidth: 260)

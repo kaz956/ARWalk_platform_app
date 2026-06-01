@@ -58,6 +58,9 @@ final class MovingEntity {
     /// 横方向に移動可能な最大幅
     var maxAvoidanceOffset: Float = 0.35
 
+    /// 現在の2D速度ベクトル (X, Z) - SFM/RVOで使用
+    var velocity2D: SIMD2<Float> = .zero
+
     /// 回避時に左右どちらを優先するかのバイアス（-1:左, 1:右）
     var avoidanceBias: Float = 0
 
@@ -154,6 +157,9 @@ final class MovingEntity {
         self.overtakeFrameCount = overtakeFrameCount
         self.directionChangeCooldown = directionChangeCooldown
         self.animationController = animationController
+        
+        let initialSpeed = currentSpeed > 0 ? currentSpeed : speed
+        self.velocity2D = SIMD2<Float>(axisDir.x, axisDir.z) * (initialSpeed * 60.0)
     }
 }
 
@@ -247,6 +253,7 @@ final class RealitySceneData {
     var sustainedHeadingCandidate: SIMD3<Float>? = nil
     var sustainedHeadingDuration: Float = 0
     var hasPathAnchorState: Bool = false
+    var lastSnappedOrientation: simd_quatf = simd_quatf()
 
     var headAnchor = AnchorEntity()
     var leftHandAnchor = AnchorEntity(.hand(.left, location: .palm))
@@ -260,6 +267,7 @@ final class RealitySceneData {
     var handTracking = HandTrackingProvider()
     var latestDevicePosition: SIMD3<Float> = .zero
     var latestDeviceForward: SIMD3<Float> = SIMD3<Float>(0, 0, -1)
+    var latestDeviceOrientation: simd_quatf = simd_quatf()
     var hasDevicePosition: Bool = false
 
     var latestLeftHandPosition: SIMD3<Float> = .zero
@@ -474,6 +482,9 @@ struct HUDImmersiveView: View {
         .onChange(of: experimentManager.hudRefreshToken) { newToken in
             sceneData.pendingHUDToken = newToken
         }
+        .onChange(of: panelModel.optimalZone) { _ in
+            updateHUDPanels()
+        }
         .onChange(of: panelModel.panels) { _ in
             updateHUDPanels()
         }
@@ -568,6 +579,7 @@ struct HUDImmersiveView: View {
         meshFactory: () -> MeshResource,
         color: UIColor,
         isMetallic: Bool = false,
+        glassRoughness: Float? = nil,
         position: SIMD3<Float>,
         collisionSize: SIMD3<Float>? = nil,
         parent: Entity,
@@ -584,7 +596,11 @@ struct HUDImmersiveView: View {
                 return existing
             }
             
-            let material = SimpleMaterial(color: color, isMetallic: isMetallic)
+            var material = SimpleMaterial(color: color, isMetallic: isMetallic)
+            if let r = glassRoughness {
+                material.roughness = .init(floatLiteral: r)
+                material.metallic = 0.8
+            }
             if var modelComponent = existing.components[ModelComponent.self] {
                 modelComponent.materials = [material]
                 existing.components.set(modelComponent)
@@ -604,7 +620,11 @@ struct HUDImmersiveView: View {
             return existing
         }
         
-        let material = SimpleMaterial(color: color, isMetallic: isMetallic)
+        var material = SimpleMaterial(color: color, isMetallic: isMetallic)
+        if let r = glassRoughness {
+            material.roughness = .init(floatLiteral: r)
+            material.metallic = 0.8
+        }
         let entity = ModelEntity(mesh: meshFactory(), materials: [material])
         entity.name = id
         entity.position = position
@@ -628,8 +648,121 @@ struct HUDImmersiveView: View {
         case "Notes": baseWidth = 0.28
         default: baseWidth = 0.38
         }
-        let baseHeight = baseWidth * 9.0 / 16.0
-        return panel.orientation == .portrait ? SIMD2<Float>(baseHeight, baseWidth) : SIMD2<Float>(baseWidth, baseHeight)
+        let baseHeight = baseWidth / panel.aspectRatio
+        return SIMD2<Float>(baseWidth, baseHeight)
+    }
+
+    private func createLineEntity(from start: SIMD3<Float>, to end: SIMD3<Float>, thickness: Float, color: UIColor) -> ModelEntity {
+        let length = distance(start, end)
+        let mesh = MeshResource.generateBox(size: [thickness, thickness, length])
+        let material = SimpleMaterial(color: color, isMetallic: false)
+        let entity = ModelEntity(mesh: mesh, materials: [material])
+        
+        let direction = normalize(end - start)
+        let midpoint = (start + end) / 2.0
+        
+        entity.position = midpoint
+        let defaultForward = SIMD3<Float>(0, 0, 1)
+        
+        if length > 0.0001 {
+            let axis = simd_cross(defaultForward, direction)
+            let axisLength = simd_length(axis)
+            if axisLength > 0.0001 {
+                let angle = acos(simd_dot(defaultForward, direction))
+                entity.orientation = simd_quatf(angle: angle, axis: axis / axisLength)
+            } else if simd_dot(defaultForward, direction) < 0 {
+                entity.orientation = simd_quatf(angle: .pi, axis: [0, 1, 0])
+            }
+        }
+        
+        return entity
+    }
+
+    private func updateOptimalZoneGuide() {
+        let guideName = "OptimalZoneGuide"
+        if let existing = sceneData.hudRoot.findEntity(named: guideName) {
+            existing.removeFromParent()
+        }
+        
+        guard panelModel.optimalZone.isGuideVisible else { return }
+        
+        let guideRoot = Entity()
+        guideRoot.name = guideName
+        sceneData.hudRoot.addChild(guideRoot)
+        
+        let config = panelModel.optimalZone
+        
+        func getPoint(yaw: Float, pitch: Float, dist: Float) -> SIMD3<Float> {
+            let theta = yaw * Float.pi / 180.0
+            let phi = pitch * Float.pi / 180.0
+            let x = dist * sin(theta) * cos(phi)
+            let y = dist * sin(phi)
+            let z = -dist * cos(theta) * cos(phi)
+            return SIMD3<Float>(x, y, z)
+        }
+        
+        let segments = 12
+        let mainColor = UIColor.cyan.withAlphaComponent(0.8)
+        let subColor = UIColor.cyan.withAlphaComponent(0.3)
+        let thickness: Float = 0.002
+        
+        // Draw arcs at minZ, baseZ, maxZ
+        let distances = [(config.minZ, subColor), (config.baseZ, mainColor), (config.maxZ, subColor)]
+        
+        for (dist, color) in distances {
+            // Horizontal arcs (top and bottom)
+            for i in 0..<segments {
+                let t1 = Float(i) / Float(segments)
+                let t2 = Float(i + 1) / Float(segments)
+                let yaw1 = config.minYaw + (config.maxYaw - config.minYaw) * t1
+                let yaw2 = config.minYaw + (config.maxYaw - config.minYaw) * t2
+                
+                let p1 = getPoint(yaw: yaw1, pitch: config.maxPitch, dist: dist)
+                let p2 = getPoint(yaw: yaw2, pitch: config.maxPitch, dist: dist)
+                guideRoot.addChild(createLineEntity(from: p1, to: p2, thickness: thickness, color: color))
+                
+                let p3 = getPoint(yaw: yaw1, pitch: config.minPitch, dist: dist)
+                let p4 = getPoint(yaw: yaw2, pitch: config.minPitch, dist: dist)
+                guideRoot.addChild(createLineEntity(from: p3, to: p4, thickness: thickness, color: color))
+            }
+            // Vertical arcs (left and right)
+            for i in 0..<segments {
+                let t1 = Float(i) / Float(segments)
+                let t2 = Float(i + 1) / Float(segments)
+                let pitch1 = config.minPitch + (config.maxPitch - config.minPitch) * t1
+                let pitch2 = config.minPitch + (config.maxPitch - config.minPitch) * t2
+                
+                let p1 = getPoint(yaw: config.minYaw, pitch: pitch1, dist: dist)
+                let p2 = getPoint(yaw: config.minYaw, pitch: pitch2, dist: dist)
+                guideRoot.addChild(createLineEntity(from: p1, to: p2, thickness: thickness, color: color))
+                
+                let p3 = getPoint(yaw: config.maxYaw, pitch: pitch1, dist: dist)
+                let p4 = getPoint(yaw: config.maxYaw, pitch: pitch2, dist: dist)
+                guideRoot.addChild(createLineEntity(from: p3, to: p4, thickness: thickness, color: color))
+            }
+        }
+        
+        // Connecting lines (corners) from minZ to maxZ
+        let corners = [
+            (config.minYaw, config.maxPitch),
+            (config.maxYaw, config.maxPitch),
+            (config.minYaw, config.minPitch),
+            (config.maxYaw, config.minPitch)
+        ]
+        for (y, p) in corners {
+            let pStart = getPoint(yaw: y, pitch: p, dist: config.minZ)
+            let pEnd = getPoint(yaw: y, pitch: p, dist: config.maxZ)
+            guideRoot.addChild(createLineEntity(from: pStart, to: pEnd, thickness: thickness, color: subColor))
+        }
+        
+        // Center Crosshair
+        let center = getPoint(yaw: config.baseYaw, pitch: config.basePitch, dist: config.baseZ)
+        let chH1 = getPoint(yaw: config.baseYaw - 2.0, pitch: config.basePitch, dist: config.baseZ)
+        let chH2 = getPoint(yaw: config.baseYaw + 2.0, pitch: config.basePitch, dist: config.baseZ)
+        let chV1 = getPoint(yaw: config.baseYaw, pitch: config.basePitch - 2.0, dist: config.baseZ)
+        let chV2 = getPoint(yaw: config.baseYaw, pitch: config.basePitch + 2.0, dist: config.baseZ)
+        guideRoot.addChild(createLineEntity(from: chH1, to: chH2, thickness: thickness * 1.5, color: .yellow))
+        guideRoot.addChild(createLineEntity(from: chV1, to: chV2, thickness: thickness * 1.5, color: .yellow))
     }
 
     func updateHUDPanels() {
@@ -704,7 +837,8 @@ struct HUDImmersiveView: View {
             _ = addOrUpdateModelEntity(
                 id: bgID,
                 meshFactory: { .generatePlane(width: panelSize.x, height: panelSize.y) },
-                color: UIColor(panel.color).withAlphaComponent(panel.opacity),
+                color: panel.useGlassmorphism ? UIColor(white: 1.0, alpha: 0.15) : UIColor(panel.color).withAlphaComponent(panel.opacity),
+                glassRoughness: panel.useGlassmorphism ? panel.glassRoughness : nil,
                 position: .zero,
                 collisionSize: nil,
                 parent: panelEntity
@@ -848,7 +982,7 @@ struct HUDImmersiveView: View {
             id: "PreStatus",
             text: statusText,
             fontSize: 0.016,
-            color: .white,
+            color: UIColor(panel.textColor),
             position: [lSize.x / 2 - 0.20, lSize.y / 2 - 0.07, 0.004],
             parent: parent
         )
@@ -870,7 +1004,7 @@ struct HUDImmersiveView: View {
             id: "PreStartL",
             text: "START",
             fontSize: 0.018,
-            color: .white,
+            color: UIColor(panel.textColor),
             position: [-0.03, -0.008, 0.001],
             parent: startButton
         )
@@ -885,7 +1019,7 @@ struct HUDImmersiveView: View {
             id: "PreCondText",
             text: conditionLabel,
             fontSize: 0.015,
-            color: .white,
+            color: UIColor(panel.textColor),
             position: [-lSize.x / 2 + 0.03, condTextY, 0.004],
             parent: parent
         )
@@ -895,26 +1029,26 @@ struct HUDImmersiveView: View {
         let decButton = addOrUpdateModelEntity(
             id: "Condition.Decrement",
             meshFactory: { .generatePlane(width: 0.04, height: 0.03) },
-            color: .white.withAlphaComponent(0.20),
+            color: UIColor(panel.textColor).withAlphaComponent(0.20),
             position: [-lSize.x / 2 + 0.05, condBtnY, 0.006],
             collisionSize: [0.04, 0.03, defaultCollisionZ],
             parent: parent
         )
         currentPreTaskIDs.insert(decButton.name)
-        let decText = addOrUpdateTextEntity(id: "PreDecText", text: "-", fontSize: 0.018, color: .white, position: [-0.005, -0.008, 0.001], parent: decButton)
+        let decText = addOrUpdateTextEntity(id: "PreDecText", text: "-", fontSize: 0.018, color: UIColor(panel.textColor), position: [-0.005, -0.008, 0.001], parent: decButton)
         if let dt = decText { currentPreTaskIDs.insert(dt.name) }
         
         // インクリメントボタン "+"
         let incButton = addOrUpdateModelEntity(
             id: "Condition.Increment",
             meshFactory: { .generatePlane(width: 0.04, height: 0.03) },
-            color: .white.withAlphaComponent(0.20),
+            color: UIColor(panel.textColor).withAlphaComponent(0.20),
             position: [-lSize.x / 2 + 0.11, condBtnY, 0.006],
             collisionSize: [0.04, 0.03, defaultCollisionZ],
             parent: parent
         )
         currentPreTaskIDs.insert(incButton.name)
-        let incText = addOrUpdateTextEntity(id: "PreIncText", text: "+", fontSize: 0.018, color: .white, position: [-0.005, -0.008, 0.001], parent: incButton)
+        let incText = addOrUpdateTextEntity(id: "PreIncText", text: "+", fontSize: 0.018, color: UIColor(panel.textColor), position: [-0.005, -0.008, 0.001], parent: incButton)
         if let it = incText { currentPreTaskIDs.insert(it.name) }
         
         // 4. 混雑条件 (LOS) コントローラー (右下)
@@ -922,21 +1056,20 @@ struct HUDImmersiveView: View {
         let crowdBtnY = -lSize.y / 2 + 0.04
         
         let crowdLabelStr: String
-        if abs(panelModel.peopleSpawnInterval - panelModel.tAB) < 0.1 {
-            crowdLabelStr = "混雑: Low (A/B)"
-        } else if abs(panelModel.peopleSpawnInterval - panelModel.tCD) < 0.1 {
-            crowdLabelStr = "混雑: Mid (C/D)"
-        } else if abs(panelModel.peopleSpawnInterval - panelModel.tEF) < 0.1 {
-            crowdLabelStr = "混雑: High (E/F)"
-        } else {
-            crowdLabelStr = "混雑: Custom"
-        }
+        let iv = panelModel.peopleSpawnInterval
+        if abs(iv - panelModel.tA) < 0.1 { crowdLabelStr = "混雑: LOS A" }
+        else if abs(iv - panelModel.tB) < 0.1 { crowdLabelStr = "混雑: LOS B" }
+        else if abs(iv - panelModel.tC) < 0.1 { crowdLabelStr = "混雑: LOS C" }
+        else if abs(iv - panelModel.tD) < 0.1 { crowdLabelStr = "混雑: LOS D" }
+        else if abs(iv - panelModel.tE) < 0.1 { crowdLabelStr = "混雑: LOS E" }
+        else if abs(iv - panelModel.tF) < 0.1 { crowdLabelStr = "混雑: LOS F" }
+        else { crowdLabelStr = "混雑: Custom" }
         
         let crowdTextEntity = addOrUpdateTextEntity(
             id: "PreCrowdText",
             text: crowdLabelStr,
             fontSize: 0.015,
-            color: .white,
+            color: UIColor(panel.textColor),
             position: [lSize.x / 2 - 0.18, crowdTextY, 0.004],
             parent: parent
         )
@@ -946,13 +1079,13 @@ struct HUDImmersiveView: View {
         let crowdBtn = addOrUpdateModelEntity(
             id: "Crowd.Toggle",
             meshFactory: { .generatePlane(width: 0.10, height: 0.03) },
-            color: .white.withAlphaComponent(0.20),
+            color: UIColor(panel.textColor).withAlphaComponent(0.20),
             position: [lSize.x / 2 - 0.09, crowdBtnY, 0.006],
             collisionSize: [0.10, 0.03, defaultCollisionZ],
             parent: parent
         )
         currentPreTaskIDs.insert(crowdBtn.name)
-        let crowdBtnText = addOrUpdateTextEntity(id: "PreCrowdBtnText", text: "TOGGLE", fontSize: 0.013, color: .white, position: [-0.03, -0.006, 0.001], parent: crowdBtn)
+        let crowdBtnText = addOrUpdateTextEntity(id: "PreCrowdBtnText", text: "TOGGLE", fontSize: 0.013, color: UIColor(panel.textColor), position: [-0.03, -0.006, 0.001], parent: crowdBtn)
         if let cbt = crowdBtnText { currentPreTaskIDs.insert(cbt.name) }
         
         // 5. CSV保存ボタン (実験後の finished 状態のときのみ表示)
@@ -976,7 +1109,7 @@ struct HUDImmersiveView: View {
                 id: "PreCSVText",
                 text: csvBtnLabel,
                 fontSize: 0.015,
-                color: .white,
+                color: UIColor(panel.textColor),
                 position: [csvBtnXOffset, -0.007, 0.001],
                 parent: csvBtn
             )
@@ -990,8 +1123,8 @@ struct HUDImmersiveView: View {
         var currentTargetIDs = Set<String>()
 
         // 固有テキスト（Title, Rule）は状態に関わらず常時左側に表示
-        addOrUpdateTextEntity(id: "Title", text: "Whack", fontSize: 0.045, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.04, 0.004], parent: parent)
-        addOrUpdateTextEntity(id: "Rule", text: experimentManager.arcadeRuleDescription, fontSize: 0.016, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.14, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Title", text: "Whack", fontSize: 0.045, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.04, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Rule", text: experimentManager.arcadeRuleDescription, fontSize: 0.016, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.14, 0.004], parent: parent)
 
         if experimentManager.state != .running {
             // タスク開始前はタスク中の表示（Score, Comboなど）をクリーンアップ
@@ -1008,8 +1141,8 @@ struct HUDImmersiveView: View {
                 }
             }
 
-            addOrUpdateTextEntity(id: "Score", text: "Score \(experimentManager.arcadeScore)", fontSize: 0.018, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.08, 0.004], parent: parent)
-            addOrUpdateTextEntity(id: "Combo", text: "Combo \(experimentManager.comboCount)", fontSize: 0.018, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.11, 0.004], parent: parent)
+            addOrUpdateTextEntity(id: "Score", text: "Score \(experimentManager.arcadeScore)", fontSize: 0.018, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.08, 0.004], parent: parent)
+            addOrUpdateTextEntity(id: "Combo", text: "Combo \(experimentManager.comboCount)", fontSize: 0.018, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.11, 0.004], parent: parent)
 
             for target in experimentManager.displayedTargets {
                 let entityName = "AttentionTarget.\(target.id.uuidString)"
@@ -1057,8 +1190,8 @@ struct HUDImmersiveView: View {
         var currentButtonIDs = Set<String>()
 
         // 固有テキスト（Title, Subtitle）は状態に関わらず常時左側に表示
-        addOrUpdateTextEntity(id: "Title", text: "Calc", fontSize: 0.045, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.04, 0.004], parent: parent)
-        addOrUpdateTextEntity(id: "Subtitle", text: "4択に回答", fontSize: 0.018, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.08, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Title", text: "Calc", fontSize: 0.045, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.04, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Subtitle", text: "4択に回答", fontSize: 0.018, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.08, 0.004], parent: parent)
 
         if experimentManager.state != .running {
             // タスク開始前はタスク中の表示（Prompt, Result, Statusなど）をクリーンアップ
@@ -1077,7 +1210,7 @@ struct HUDImmersiveView: View {
 
             if let question = experimentManager.displayedQuestion {
                 addOrUpdateTextEntity(id: "Status", text: "", fontSize: 0.001, color: .clear, position: .zero, parent: parent)
-                addOrUpdateTextEntity(id: "Prompt", text: question.prompt, fontSize: 0.038, color: .white, position: [-0.08, 0.01, 0.004], parent: parent)
+                addOrUpdateTextEntity(id: "Prompt", text: question.prompt, fontSize: 0.038, color: UIColor(panel.textColor), position: [-0.08, 0.01, 0.004], parent: parent)
                 addOrUpdateTextEntity(id: "Result", text: "", fontSize: 0.001, color: .clear, position: .zero, parent: parent)
             
                 let optionOffsets: [SIMD3<Float>] = [
@@ -1093,12 +1226,12 @@ struct HUDImmersiveView: View {
                     let button = addOrUpdateModelEntity(
                         id: entityName,
                         meshFactory: { .generatePlane(width: 0.09, height: 0.04) },
-                        color: .white.withAlphaComponent(0.20),
+                        color: UIColor(panel.textColor).withAlphaComponent(0.20),
                         position: optionOffsets[index],
                         collisionSize: [0.09, 0.04, defaultCollisionZ],
                         parent: parent
                     )
-                    addOrUpdateTextEntity(id: "Label", text: "\(option)", fontSize: 0.028, color: .white, position: SIMD3<Float>(-0.015, -0.010, 0.001), parent: button)
+                    addOrUpdateTextEntity(id: "Label", text: "\(option)", fontSize: 0.028, color: UIColor(panel.textColor), position: SIMD3<Float>(-0.015, -0.010, 0.001), parent: button)
                 }
             } else {
                 addOrUpdateTextEntity(id: "Prompt", text: "", fontSize: 0.001, color: .clear, position: .zero, parent: parent)
@@ -1107,7 +1240,7 @@ struct HUDImmersiveView: View {
                     addOrUpdateTextEntity(id: "Result", text: result ? "正解！" : "不正解...", fontSize: 0.032, color: resultColor, position: [-0.045, 0.03, 0.004], parent: parent)
                     addOrUpdateTextEntity(id: "Status", text: "", fontSize: 0.001, color: .clear, position: .zero, parent: parent)
                 } else {
-                    addOrUpdateTextEntity(id: "Status", text: "次の問題を準備中...", fontSize: 0.022, color: .white, position: [-0.11, -0.01, 0.004], parent: parent)
+                    addOrUpdateTextEntity(id: "Status", text: "次の問題を準備中...", fontSize: 0.022, color: UIColor(panel.textColor), position: [-0.11, -0.01, 0.004], parent: parent)
                     addOrUpdateTextEntity(id: "Result", text: "", fontSize: 0.001, color: .clear, position: .zero, parent: parent)
                 }
             }
@@ -1126,7 +1259,7 @@ struct HUDImmersiveView: View {
         var currentIDs = Set<String>()
 
         // 固有テキスト（Title）は状態に関わらず常時左側に表示。文字入力のSubtitleはちらつき防止およびユーザー要望により削除
-        addOrUpdateTextEntity(id: "Title", text: "Text", fontSize: 0.045, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.04, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Title", text: "Text", fontSize: 0.045, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.04, 0.004], parent: parent)
 
         if experimentManager.state != .running {
             // タスク開始前はタスク中の表示をクリーンアップ
@@ -1145,7 +1278,7 @@ struct HUDImmersiveView: View {
 
             if let prompt = experimentManager.textEntryPrompt {
                 let e1 = addOrUpdateTextEntity(id: "TargetL", text: "TARGET", fontSize: 0.012, color: .systemGray, position: [-lSize.x / 2 + 0.04, lSize.y * 0.35, 0.004], parent: parent)
-                let e2 = addOrUpdateTextEntity(id: "TargetV", text: prompt.targetText, fontSize: 0.042, color: .white, position: [-lSize.x / 2 + 0.04, lSize.y * 0.20, 0.004], parent: parent)
+                let e2 = addOrUpdateTextEntity(id: "TargetV", text: prompt.targetText, fontSize: 0.042, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.04, lSize.y * 0.20, 0.004], parent: parent)
                 let e3 = addOrUpdateTextEntity(id: "InputV", text: "> \(prompt.enteredText)", fontSize: 0.032, color: .systemYellow, position: [-lSize.x / 2 + 0.04, lSize.y * 0.05, 0.004], parent: parent)
                 if let e = e1 { currentIDs.insert(e.name) }
                 if let e = e2 { currentIDs.insert(e.name) }
@@ -1153,7 +1286,7 @@ struct HUDImmersiveView: View {
 
                 let endButton = addOrUpdateModelEntity(id: "TextEntry.End", meshFactory: { .generatePlane(width: 0.08, height: 0.035) }, color: .systemRed.withAlphaComponent(0.4), position: [lSize.x / 2 - 0.05, lSize.y / 2 - 0.03, 0.006], collisionSize: [0.088, 0.043, defaultCollisionZ], parent: parent)
                 currentIDs.insert(endButton.name)
-                if let e = addOrUpdateTextEntity(id: "EndL", text: "END", fontSize: 0.018, color: .white, position: SIMD3<Float>(-0.018, -0.008, 0.001), parent: endButton) {
+                if let e = addOrUpdateTextEntity(id: "EndL", text: "END", fontSize: 0.018, color: UIColor(panel.textColor), position: SIMD3<Float>(-0.018, -0.008, 0.001), parent: endButton) {
                     currentIDs.insert(e.name)
                 }
 
@@ -1177,13 +1310,13 @@ struct HUDImmersiveView: View {
                         let button = addOrUpdateModelEntity(
                             id: entityName,
                             meshFactory: { .generatePlane(width: 0.04 * kbScale, height: 0.03 * kbScale) },
-                            color: .white.withAlphaComponent(0.12),
+                            color: UIColor(panel.textColor).withAlphaComponent(0.12),
                             position: [startX + Float(colIndex) * spacingX, y, 0.006],
                             collisionSize: [0.044 * kbScale, 0.034 * kbScale, defaultCollisionZ],
                             parent: parent
                         )
                         currentIDs.insert(button.name)
-                        if let e = addOrUpdateTextEntity(id: "Label", text: key, fontSize: 0.018 * kbScale, color: .white, position: SIMD3<Float>(-0.006 * kbScale, -0.008 * kbScale, 0.001), parent: button) {
+                        if let e = addOrUpdateTextEntity(id: "Label", text: key, fontSize: 0.018 * kbScale, color: UIColor(panel.textColor), position: SIMD3<Float>(-0.006 * kbScale, -0.008 * kbScale, 0.001), parent: button) {
                             currentIDs.insert(e.name)
                         }
                     }
@@ -1192,7 +1325,7 @@ struct HUDImmersiveView: View {
                 let delX = (Float(rows[2].count - 1) * spacingX) / 2 + spacingX * 1.15
                 let delButton = addOrUpdateModelEntity(id: "TextEntry.Delete", meshFactory: { .generatePlane(width: 0.055 * kbScale, height: 0.03 * kbScale) }, color: .systemRed.withAlphaComponent(0.25), position: [delX, kbTopY - 2.0 * spacingY, 0.006], collisionSize: [0.063 * kbScale, 0.038 * kbScale, defaultCollisionZ], parent: parent)
                 currentIDs.insert(delButton.name)
-                if let e = addOrUpdateTextEntity(id: "DelL", text: "DEL", fontSize: 0.015 * kbScale, color: .white, position: SIMD3<Float>(-0.013 * kbScale, -0.006 * kbScale, 0.001), parent: delButton) {
+                if let e = addOrUpdateTextEntity(id: "DelL", text: "DEL", fontSize: 0.015 * kbScale, color: UIColor(panel.textColor), position: SIMD3<Float>(-0.013 * kbScale, -0.006 * kbScale, 0.001), parent: delButton) {
                     currentIDs.insert(e.name)
                 }
 
@@ -1217,7 +1350,7 @@ struct HUDImmersiveView: View {
                     let e = addOrUpdateTextEntity(id: "Result", text: result ? "正解！" : "不正解...", fontSize: 0.045, color: result ? .systemGreen : .systemRed, position: [-0.06, 0.02, 0.004], parent: parent)
                     if let e = e { currentIDs.insert(e.name) }
                 } else {
-                    let e = addOrUpdateTextEntity(id: "Status", text: "次の語を準備中...", fontSize: 0.022, color: .white, position: [-0.12, -0.01, 0.004], parent: parent)
+                    let e = addOrUpdateTextEntity(id: "Status", text: "次の語を準備中...", fontSize: 0.022, color: UIColor(panel.textColor), position: [-0.12, -0.01, 0.004], parent: parent)
                     if let e = e { currentIDs.insert(e.name) }
                 }
             }
@@ -1236,8 +1369,8 @@ struct HUDImmersiveView: View {
         var currentEntityIDs = Set<String>()
 
         // 固有テキスト（Title, Subtitle）は状態に関わらず常時左側に表示
-        addOrUpdateTextEntity(id: "Title", text: "Explore", fontSize: 0.035, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.03, 0.004], parent: parent)
-        addOrUpdateTextEntity(id: "Subtitle", text: "ページ探索", fontSize: 0.018, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.065, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Title", text: "Explore", fontSize: 0.035, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.03, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Subtitle", text: "ページ探索", fontSize: 0.018, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.065, 0.004], parent: parent)
 
         if experimentManager.state != .running {
             // タスク開始前はタスク中の表示（GoalL, GoalV, TitleV, Statusなど）をクリーンアップ
@@ -1257,10 +1390,10 @@ struct HUDImmersiveView: View {
             if let challenge = experimentManager.pageExplorationChallenge {
                 addOrUpdateTextEntity(id: "GoalL", text: "GOAL", fontSize: 0.014, color: .systemYellow, position: [-lSize.x / 2 + 0.04, lSize.y / 2 - 0.06, 0.004], parent: parent)
                 addOrUpdateTextEntity(id: "GoalV", text: challenge.targetTitle, fontSize: 0.022, color: .systemYellow, position: [-lSize.x / 2 + 0.10, lSize.y / 2 - 0.064, 0.004], parent: parent)
-                addOrUpdateTextEntity(id: "TitleV", text: challenge.currentPage.title, fontSize: 0.020, color: .white, position: [-lSize.x / 2 + 0.04, lSize.y / 2 - 0.095, 0.004], parent: parent)
+                addOrUpdateTextEntity(id: "TitleV", text: challenge.currentPage.title, fontSize: 0.020, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.04, lSize.y / 2 - 0.095, 0.004], parent: parent)
 
                 // Simplification: Not full text rendering here for brevity, but maintaining structure
-                addOrUpdateTextEntity(id: "Status", text: "ページを読み込み中...", fontSize: 0.02, color: .white, position: [-0.12, -0.01, 0.004], parent: parent)
+                addOrUpdateTextEntity(id: "Status", text: "ページを読み込み中...", fontSize: 0.02, color: UIColor(panel.textColor), position: [-0.12, -0.01, 0.004], parent: parent)
             }
         }
     }
@@ -1271,8 +1404,8 @@ struct HUDImmersiveView: View {
         var currentMarkers = Set<String>()
 
         // 固有テキスト（Title, Subtitle）は状態に関わらず常時左側に表示
-        addOrUpdateTextEntity(id: "Title", text: "N-Back", fontSize: 0.05, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.05, 0.004], parent: parent)
-        addOrUpdateTextEntity(id: "Subtitle", text: "\(experimentManager.nBackConfig.nValue)-back で色を回答", fontSize: 0.018, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.09, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Title", text: "N-Back", fontSize: 0.05, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.05, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Subtitle", text: "\(experimentManager.nBackConfig.nValue)-back で色を回答", fontSize: 0.018, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.09, 0.004], parent: parent)
 
         if experimentManager.state != .running {
             // タスク開始前はタスク中の表示（Status, Resultなど）をクリーンアップ
@@ -1309,13 +1442,13 @@ struct HUDImmersiveView: View {
                 }
 
                 let nextButton = addOrUpdateModelEntity(id: "NBack.Next", meshFactory: { .generatePlane(width: 0.10, height: 0.035) }, color: .systemBlue.withAlphaComponent(0.3), position: [0, -0.09, 0.006], collisionSize: [0.10, 0.035, defaultCollisionZ], parent: parent)
-                addOrUpdateTextEntity(id: "NextL", text: "NEXT", fontSize: 0.018, color: .white, position: SIMD3<Float>(-0.022, -0.008, 0.001), parent: nextButton)
+                addOrUpdateTextEntity(id: "NextL", text: "NEXT", fontSize: 0.018, color: UIColor(panel.textColor), position: SIMD3<Float>(-0.022, -0.008, 0.001), parent: nextButton)
                 currentMarkers.insert("NBack.Next")
             } else {
                 if let lastResult = experimentManager.nBackTaskManager.lastResult {
                     addOrUpdateTextEntity(id: "Result", text: lastResult ? "正解！" : "不正解...", fontSize: 0.03, color: lastResult ? .systemGreen : .systemRed, position: [-0.045, 0.0, 0.004], parent: parent)
                 } else {
-                    addOrUpdateTextEntity(id: "Status", text: "次の色を準備中...", fontSize: 0.02, color: .white, position: [-0.11, -0.01, 0.004], parent: parent)
+                    addOrUpdateTextEntity(id: "Status", text: "次の色を準備中...", fontSize: 0.02, color: UIColor(panel.textColor), position: [-0.11, -0.01, 0.004], parent: parent)
                 }
             }
         }
@@ -1329,8 +1462,8 @@ struct HUDImmersiveView: View {
 
     private func addInfoContents(on panel: PanelModel.PanelInfo, parent: Entity) {
         let lSize = getLogicalSize(for: panel)
-        addOrUpdateTextEntity(id: "Title", text: panel.id, fontSize: 0.05, color: .white, position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.05, 0.004], parent: parent)
-        addOrUpdateTextEntity(id: "Subtitle", text: "予備パネル", fontSize: 0.022, color: .white, position: [-0.06, -0.01, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Title", text: panel.id, fontSize: 0.05, color: UIColor(panel.textColor), position: [-lSize.x / 2 + 0.03, lSize.y / 2 - 0.05, 0.004], parent: parent)
+        addOrUpdateTextEntity(id: "Subtitle", text: "予備パネル", fontSize: 0.022, color: UIColor(panel.textColor), position: [-0.06, -0.01, 0.004], parent: parent)
     }
 
     private func updateSpawnLineVisualization(isVisible: Bool) {
@@ -1422,11 +1555,26 @@ struct HUDImmersiveView: View {
         let wallLimit = Float(panelModel.peopleHorizontalRange) - 0.5
         let xOffset = sceneData.randomGen.random(in: -wallLimit...wallLimit)
 
-        let end = spawnLineEndWorld // 被験者スタート ＝ 歩行者消滅位置
-        let userEnd = spawnLineStartWorld // 被験者ゴール (30m先)
-        let walkDir = normalize(userEnd - end) // 被験者の進行方向 (endからuserEndへ)
-        let start = userEnd + walkDir * 10.0 // 歩行者湧き位置 (ゴールより10m奥側)
-        let segDir = normalize(end - start) // 歩行者の進行方向 (startからendへ)
+        let baseEnd = spawnLineEndWorld // 被験者スタート ＝ 歩行者消滅位置
+        let baseUserEnd = spawnLineStartWorld // 被験者ゴール (30m先)
+        let walkDir = normalize(baseUserEnd - baseEnd) // 被験者の進行方向 (endからuserEndへ)
+        
+        let start: SIMD3<Float>
+        let end: SIMD3<Float>
+        
+        let isTwoWay = (panelModel.pedestrianDirectionMode == .twoWay)
+        let spawnOpposite = isTwoWay && sceneData.randomGen.randomBool()
+        
+        if spawnOpposite {
+            // 被験者と同じ方向に歩く（背後から湧いて追い越すイメージ）
+            start = baseEnd - walkDir * 5.0
+            end = baseUserEnd + walkDir * 10.0
+        } else {
+            // 対向して歩く（デフォルト）
+            start = baseUserEnd + walkDir * 10.0 // ゴールより奥
+            end = baseEnd - walkDir * 10.0
+        }
+        let segDir = normalize(end - start) // 歩行者の進行方向
         
         // --- 速度のブレンド分布（中心付近が出やすい三角形分布 + 一様分布の平均） ---
         var speedMag = (sceneData.randomGen.random(in: speedZRange) + (sceneData.randomGen.random(in: speedZRange) + sceneData.randomGen.random(in: speedZRange)) * 0.5) * 0.5
@@ -1512,12 +1660,18 @@ struct HUDImmersiveView: View {
         
         let interval = panelModel.peopleSpawnInterval
         let trials: Int
-        if interval <= panelModel.tEF + 0.1 {
-            trials = 80 // 高密度 (LOS E/F)
-        } else if interval <= panelModel.tCD + 0.1 {
-            trials = 25 // 中密度 (LOS C/D)
+        if interval <= panelModel.tF + 0.1 {
+            trials = 100 // LOS F
+        } else if interval <= panelModel.tE + 0.1 {
+            trials = 70 // LOS E
+        } else if interval <= panelModel.tD + 0.1 {
+            trials = 40 // LOS D
+        } else if interval <= panelModel.tC + 0.1 {
+            trials = 20 // LOS C
+        } else if interval <= panelModel.tB + 0.1 {
+            trials = 10 // LOS B
         } else {
-            trials = 8  // 低密度 (LOS A/B)
+            trials = 5  // LOS A
         }
         
         for _ in 0..<trials {
@@ -1771,7 +1925,7 @@ struct HUDImmersiveView: View {
         return max(0.01, maxX - minX)
     }
 
-    private func updatePathAnchoredHUD(userWorldPosition: SIMD3<Float>, headForward: SIMD3<Float>, deltaTime: TimeInterval) {
+    private func updatePathAnchoredHUD(userWorldPosition: SIMD3<Float>, headForward: SIMD3<Float>, headOrientation: simd_quatf, deltaTime: TimeInterval) {
         let positionAlpha = smoothingAlpha(deltaTime: deltaTime, timeConstant: 0.12)
         let heightAlpha = smoothingAlpha(deltaTime: deltaTime, timeConstant: 0.45)
         let velocityAlpha = smoothingAlpha(deltaTime: deltaTime, timeConstant: 0.10)
@@ -1860,21 +2014,117 @@ struct HUDImmersiveView: View {
             sceneData.sustainedHeadingDuration = 0
         }
 
-        sceneData.smoothedPathForward = sceneData.locomotionHeading
-        let params = clampPathHUDParameters()
-        let xRadians = params.xAngleDeg * Float.pi / 180
-        let pathForward = rotateHorizontalForward(basePathForward, by: xRadians)
-        let pathZ = -pathForward
-        let worldUp = SIMD3<Float>(0, 1, 0)
-        let pathXCandidate = simd_cross(worldUp, pathZ)
-        let pathX = simd_length(pathXCandidate) > 0.0001 ? simd_normalize(pathXCandidate) : SIMD3<Float>(1, 0, 0)
-        let pathY = simd_normalize(simd_cross(pathZ, pathX))
+        let trackingMode = panelModel.trackingMode
+        
+        switch trackingMode {
+        case .pathLocked:
+            sceneData.smoothedPathForward = sceneData.locomotionHeading
+            let params = clampPathHUDParameters()
+            let xRadians = params.xAngleDeg * Float.pi / 180
+            let pathForward = rotateHorizontalForward(basePathForward, by: xRadians)
+            let pathZ = -pathForward
+            let worldUp = SIMD3<Float>(0, 1, 0)
+            let pathXCandidate = simd_cross(worldUp, pathZ)
+            let pathX = simd_length(pathXCandidate) > 0.0001 ? simd_normalize(pathXCandidate) : SIMD3<Float>(1, 0, 0)
+            let pathY = simd_normalize(simd_cross(pathZ, pathX))
 
-        sceneData.pathAnchor.position = sceneData.pathAnchorPosition
-        sceneData.pathAnchor.orientation = simd_quaternion(simd_float3x3(pathX, pathY, pathZ))
+            sceneData.pathAnchor.position = sceneData.pathAnchorPosition
+            sceneData.pathAnchor.orientation = simd_quaternion(simd_float3x3(pathX, pathY, pathZ))
+            
+        case .bodyLocked:
+            sceneData.smoothedPathForward = sceneData.locomotionHeading
+            let params = clampPathHUDParameters()
+            let xRadians = params.xAngleDeg * Float.pi / 180
+            let pathForward = rotateHorizontalForward(sceneData.locomotionHeading, by: xRadians)
+            let pathZ = -pathForward
+            let worldUp = SIMD3<Float>(0, 1, 0)
+            let pathXCandidate = simd_cross(worldUp, pathZ)
+            let pathX = simd_length(pathXCandidate) > 0.0001 ? simd_normalize(pathXCandidate) : SIMD3<Float>(1, 0, 0)
+            let pathY = simd_normalize(simd_cross(pathZ, pathX))
+
+            sceneData.pathAnchor.position = sceneData.pathAnchorPosition
+            sceneData.pathAnchor.orientation = simd_quaternion(simd_float3x3(pathX, pathY, pathZ))
+            
+        case .headLocked:
+            sceneData.smoothedPathForward = sceneData.locomotionHeading
+            sceneData.pathAnchor.position = userWorldPosition
+            sceneData.pathAnchor.orientation = headOrientation
+            
+        case .lazyFollow:
+            sceneData.smoothedPathForward = sceneData.locomotionHeading
+            let smoothPosAlpha = smoothingAlpha(deltaTime: deltaTime, timeConstant: 0.15)
+            let smoothRotAlpha = smoothingAlpha(deltaTime: deltaTime, timeConstant: 0.15)
+            let currentPos = sceneData.pathAnchor.position
+            let currentRot = sceneData.pathAnchor.orientation
+            
+            // For lazy follow, we initialize it if it's too far
+            if distance(currentPos, userWorldPosition) > 1.0 {
+                sceneData.pathAnchor.position = userWorldPosition
+                sceneData.pathAnchor.orientation = headOrientation
+            } else {
+                sceneData.pathAnchor.position = simd_mix(currentPos, userWorldPosition, SIMD3<Float>(repeating: smoothPosAlpha))
+                sceneData.pathAnchor.orientation = simd_slerp(currentRot, headOrientation, smoothRotAlpha)
+            }
+            
+        case .pitchLockedYawFollow:
+            sceneData.smoothedPathForward = sceneData.locomotionHeading
+            sceneData.pathAnchor.position = userWorldPosition
+            let headForward = headOrientation.act(SIMD3<Float>(0, 0, -1))
+            let headForwardXZ = simd_length(SIMD3<Float>(headForward.x, 0, headForward.z)) > 0.0001 ? simd_normalize(SIMD3<Float>(headForward.x, 0, headForward.z)) : SIMD3<Float>(0, 0, -1)
+            let yawRot = simd_quaternion(simd_float3x3(
+                simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), -headForwardXZ)),
+                SIMD3<Float>(0, 1, 0),
+                -headForwardXZ
+            ))
+            sceneData.pathAnchor.orientation = yawRot
+            
+        case .yawLockedPitchFollow:
+            sceneData.smoothedPathForward = sceneData.locomotionHeading
+            sceneData.pathAnchor.position = userWorldPosition
+            let headForward = headOrientation.act(SIMD3<Float>(0, 0, -1))
+            let pitchAngle = asin(max(-1.0, min(1.0, headForward.y)))
+            let pathZ = -sceneData.locomotionHeading
+            let pathXCandidate = simd_cross(SIMD3<Float>(0, 1, 0), pathZ)
+            let pathX = simd_length(pathXCandidate) > 0.0001 ? simd_normalize(pathXCandidate) : SIMD3<Float>(1, 0, 0)
+            let yawRot = simd_quaternion(simd_float3x3(pathX, SIMD3<Float>(0, 1, 0), pathZ))
+            let pitchRot = simd_quatf(angle: pitchAngle, axis: SIMD3<Float>(1, 0, 0))
+            sceneData.pathAnchor.orientation = yawRot * pitchRot
+            
+        case .snapFollow:
+            sceneData.smoothedPathForward = sceneData.locomotionHeading
+            sceneData.pathAnchor.position = userWorldPosition
+            
+            let currentRot = sceneData.lastSnappedOrientation
+            let dot = abs(simd_dot(currentRot.vector, headOrientation.vector))
+            let angleDiff = 2.0 * acos(max(-1.0, min(1.0, dot)))
+            let thresholdRadians = Float(panelModel.snapThresholdDegrees) * .pi / 180.0
+            
+            if angleDiff > thresholdRadians || currentRot.vector == SIMD4<Float>(0,0,0,0) {
+                sceneData.lastSnappedOrientation = headOrientation
+            }
+            
+            let smoothRotAlpha = smoothingAlpha(deltaTime: deltaTime, timeConstant: 0.1)
+            let interpRot = simd_slerp(sceneData.pathAnchor.orientation, sceneData.lastSnappedOrientation, smoothRotAlpha)
+            sceneData.pathAnchor.orientation = interpRot
+            
+        case .worldOriented:
+            sceneData.smoothedPathForward = sceneData.locomotionHeading
+            sceneData.pathAnchor.position = userWorldPosition
+            let params = clampPathHUDParameters()
+            let xRadians = params.xAngleDeg * Float.pi / 180
+            let pathForward = rotateHorizontalForward(basePathForward, by: xRadians)
+            let pathZ = -pathForward
+            let pathXCandidate = simd_cross(SIMD3<Float>(0, 1, 0), pathZ)
+            let pathX = simd_length(pathXCandidate) > 0.0001 ? simd_normalize(pathXCandidate) : SIMD3<Float>(1, 0, 0)
+            let pathY = simd_normalize(simd_cross(pathZ, pathX))
+            sceneData.pathAnchor.orientation = simd_quaternion(simd_float3x3(pathX, pathY, pathZ))
+        }
+
         sceneData.hudRoot.position = .zero
         sceneData.hudRoot.orientation = simd_quatf()
         sceneData.hudRoot.scale = SIMD3<Float>(repeating: 1.0)
+        
+        updateOptimalZoneGuide()
     }
 
     /// 毎フレームの移動および回避ロジック（高度なパス評価と衝突回避）
@@ -1908,14 +2158,16 @@ struct HUDImmersiveView: View {
             sceneData.latestDevicePosition = SIMD3<Float>(t.x, t.y, t.z)
             // deviceAnchor の -Z 方向を「ユーザーが向いている前方」として扱う。
             sceneData.latestDeviceForward = simd_normalize(SIMD3<Float>(-zAxis.x, -zAxis.y, -zAxis.z))
+            sceneData.latestDeviceOrientation = simd_quatf(transform)
             sceneData.hasDevicePosition = true
         }
         let rawHeadPos = sceneData.hasDevicePosition ? sceneData.latestDevicePosition : sceneData.headAnchor.position(relativeTo: nil)
         let rawForward = sceneData.hasDevicePosition ? sceneData.latestDeviceForward : simd_act(sceneData.headAnchor.orientation(relativeTo: nil), SIMD3<Float>(0, 0, -1))
+        let rawHeadOri = sceneData.hasDevicePosition ? sceneData.latestDeviceOrientation : sceneData.headAnchor.orientation(relativeTo: nil)
         let headForward = simd_normalize(SIMD3<Float>(rawForward.x, 0, rawForward.z))
         let bodyBackwardOffset: Float = 0.15
         let headPos = rawHeadPos - headForward * bodyBackwardOffset
-        updatePathAnchoredHUD(userWorldPosition: rawHeadPos, headForward: rawForward, deltaTime: deltaTime)
+        updatePathAnchoredHUD(userWorldPosition: rawHeadPos, headForward: rawForward, headOrientation: rawHeadOri, deltaTime: deltaTime)
 
         // --- ゴール（Endの球）への到達判定によるタスク自動終了 ---
         if experimentManager.state == .running {
@@ -1979,6 +2231,21 @@ struct HUDImmersiveView: View {
         if deltaTime > 0.2 { return }
         let dt = max(0.0001, min(0.05, Float(deltaTime)))
 
+        // --- アルゴリズムによる分岐 ---
+        switch panelModel.pedestrianAlgorithm {
+        case .customLaneBased:
+            updatePedestriansCustomLaneBased(deltaTime: deltaTime, dt: dt, leftPos: leftPos, rightPos: rightPos, isLeftAnchored: isLeftAnchored, isRightAnchored: isRightAnchored, headPos: headPos, isHeadAnchored: isHeadAnchored, speedMultiplier: speedMultiplier, bodyRadius: bodyRadius, handRadius: handRadius)
+        case .socialForceModel:
+            updatePedestriansSFM(deltaTime: deltaTime, dt: dt, leftPos: leftPos, rightPos: rightPos, isLeftAnchored: isLeftAnchored, isRightAnchored: isRightAnchored, headPos: headPos, isHeadAnchored: isHeadAnchored, speedMultiplier: speedMultiplier)
+        case .rvo:
+            updatePedestriansRVO(deltaTime: deltaTime, dt: dt, leftPos: leftPos, rightPos: rightPos, isLeftAnchored: isLeftAnchored, isRightAnchored: isRightAnchored, headPos: headPos, isHeadAnchored: isHeadAnchored, speedMultiplier: speedMultiplier)
+        case .hybrid:
+            updatePedestriansHybrid(deltaTime: deltaTime, dt: dt, leftPos: leftPos, rightPos: rightPos, isLeftAnchored: isLeftAnchored, isRightAnchored: isRightAnchored, headPos: headPos, isHeadAnchored: isHeadAnchored, speedMultiplier: speedMultiplier)
+        }
+        
+    }
+
+    private func updatePedestriansCustomLaneBased(deltaTime: TimeInterval, dt: Float, leftPos: SIMD3<Float>, rightPos: SIMD3<Float>, isLeftAnchored: Bool, isRightAnchored: Bool, headPos: SIMD3<Float>, isHeadAnchored: Bool, speedMultiplier: Float, bodyRadius: Float, handRadius: Float) {
         // --- シミュレーションパラメータ ---
         let lookAheadBase: Float = 2.5
         let proactiveLookAhead: Float = 8.0
@@ -1986,6 +2253,8 @@ struct HUDImmersiveView: View {
         let oncomingLookAhead: Float = 4.0
         let neighborRadius: Float = 4.5
         let stopGapBase: Float = 0.28
+        
+        let yOffset = Float(panelModel.peopleHeightOffset)
         
         struct EntitySnapshot {
             let index: Int
@@ -2104,9 +2373,14 @@ struct HUDImmersiveView: View {
 
                     let collisionSlowdownWidth = moving.personalRadius + other.personalRadius - 0.05
                     if forwardGap > 0.0 && forwardGap < minSafeDist && abs(sideGap) < collisionSlowdownWidth {
-                        // 相手が自分より速く離れていく場合は急減速しない
-                        if other.currentSpeed <= moving.currentSpeed * 1.1 {
-                            desiredSpeed = min(desiredSpeed, other.currentSpeed * 0.35)
+                        if headingAlignment > 0.0 {
+                            // 同一方向の場合：前の人に追突しないよう相手の速度に合わせる
+                            if other.currentSpeed <= moving.currentSpeed * 1.1 {
+                                desiredSpeed = min(desiredSpeed, other.currentSpeed * 0.35)
+                            }
+                        } else {
+                            // 対向の場合：お互い止まらないように少し減速する程度にし、横に逃げるのを優先
+                            desiredSpeed = min(desiredSpeed, moving.speed * 0.6)
                         }
                     }
                 }
@@ -2114,12 +2388,15 @@ struct HUDImmersiveView: View {
                 // 前方の歩行者への回避コスト（基本）
                 if forwardGap > 0.15 && forwardGap < proactiveLookAhead {
                     let distWeight = pow(max(0, 1.0 - forwardGap / proactiveLookAhead), 1.5)
-                    let oncomingBonus: Float = 1.0
+                    // 対向してくる人には早めに強く避けるためボーナスを大きくする
+                    let oncomingBonus: Float = headingAlignment < 0.0 ? 4.0 : 1.0
+                    // 対向してくる人は横幅の余裕を広めにとる
+                    let effectiveClearance = headingAlignment < 0.0 ? clearance + 0.2 : clearance
 
                     for (idx, offset) in samples.enumerated() {
-                        let laneDist = abs(other.lateralOffset - offset)
-                        if laneDist < clearance {
-                            costs[idx] += (1.0 - laneDist / clearance) * distWeight * oncomingBonus
+                        let distFromOtherSide = abs(sideGap - (offset - moving.lateralOffset))
+                        if distFromOtherSide < effectiveClearance {
+                            costs[idx] += (1.0 - distFromOtherSide / effectiveClearance) * distWeight * oncomingBonus
                         }
                     }
                 }
@@ -2130,10 +2407,10 @@ struct HUDImmersiveView: View {
                 if forwardGap >= -3.5 && forwardGap <= 0.15 {
                     let distWeight = pow(max(0, 1.0 - abs(forwardGap) / 3.5), 1.5)
                     for (idx, offset) in samples.enumerated() {
-                        let laneDist = abs(other.lateralOffset - offset)
+                        let distFromOtherSide = abs(sideGap - (offset - moving.lateralOffset))
                         let myCurrentLaneDist = abs(moving.lateralOffset - offset)
-                        if laneDist < clearance && myCurrentLaneDist > 0.4 {
-                            costs[idx] += (1.0 - laneDist / clearance) * distWeight * 1.5
+                        if distFromOtherSide < clearance && myCurrentLaneDist > 0.4 {
+                            costs[idx] += (1.0 - distFromOtherSide / clearance) * distWeight * 1.5
                         }
                     }
                 }
@@ -2189,27 +2466,32 @@ struct HUDImmersiveView: View {
                 }
             }
 
-            // --- 最適な進路の決定（ソフトマックス的な重み付け） ---
-            var totalWeight: Float = 0
-            var weightedOffset: Float = 0
-            let sensitivity: Float = 5.0
+            // --- 最適な進路の決定（最小コスト探索） ---
+            var bestCost: Float = Float.greatestFiniteMagnitude
+            var bestOffset: Float = moving.preferredCruiseOffset
 
             for idx in 0..<sampleCount {
                 let distFromCurrent = abs(samples[idx] - moving.lateralOffset)
-                // 横移動の距離ペナルティを強めにして、無駄に大外へ膨らむのを防ぐ
-                let persistencePenalty = distFromCurrent * 0.90
+                // 横移動の距離ペナルティ（無駄に大外へ膨らむのを防ぐが、強すぎると避けなくなるため調整）
+                let persistencePenalty = distFromCurrent * 0.60
                 let distFromPreferred = abs(samples[idx] - moving.preferredCruiseOffset)
                 let centerBias = distFromPreferred * 0.15
                 let wallDist = wallLimitTotal - abs(samples[idx])
                 let wallPenalty = wallDist < 0.5 ? (0.5 - wallDist) * 3.0 : 0.0
+                
+                // 対向者と正面衝突しないよう、「左側へ避ける」微小なバイアスを加える（対称性の破壊）
+                // offsetが負（左側）の時にコストが下がり、正（右側）の時にコストが上がる
+                let keepLeftBias = samples[idx] * 0.08
 
-                let totalCost = costs[idx] + persistencePenalty + wallPenalty + centerBias
-                let weight = exp(-totalCost * sensitivity)
-                weightedOffset += samples[idx] * weight
-                totalWeight += weight
+                let totalCost = costs[idx] + persistencePenalty + wallPenalty + centerBias + keepLeftBias
+                
+                if totalCost < bestCost {
+                    bestCost = totalCost
+                    bestOffset = samples[idx]
+                }
             }
 
-            let fluidTargetOffset = totalWeight > 0 ? (weightedOffset / totalWeight) : moving.preferredCruiseOffset
+            let fluidTargetOffset = bestOffset
             var rawDesiredLateral = fluidTargetOffset
 
             // 自然な「ゆらぎ」の計算
@@ -2425,9 +2707,9 @@ struct HUDImmersiveView: View {
             }
 
             if nearestOncomingGap < lookAheadBase {
-                let slowdownFactor = 0.4 + 0.6 * max(0, nearestOncomingGap / lookAheadBase)
+                // デッドロック（お見合い停止）を防ぐため、対向に対しては完全停止せず最低60%の速度を維持してすり抜ける
+                let slowdownFactor = 0.6 + 0.4 * max(0, nearestOncomingGap / lookAheadBase)
                 desiredSpeed = min(desiredSpeed, moving.speed * slowdownFactor)
-                if nearestOncomingGap < stopGap { moving.yieldFramesRemaining = max(moving.yieldFramesRemaining, 8) }
             }
             
             if moving.yieldFramesRemaining > 0 {
@@ -2442,12 +2724,13 @@ struct HUDImmersiveView: View {
             // 減速（dt * 3.5）は比較的早めに行い、加速（dt * 0.9）はより徐々に行う
             moving.currentSpeed += (desiredSpeed - moving.currentSpeed) * (desiredSpeed < moving.currentSpeed ? min(1.0, dt * 3.5) : min(1.0, dt * 0.9))
             let realSpeedPerSec = moving.currentSpeed * 60.0
-            let vForward = realSpeedPerSec * speedMultiplier
+            var vForward = realSpeedPerSec * speedMultiplier
 
             let targetLat = max(-wallLimitTotal, min(wallLimitTotal, rawDesiredLateral + max(-0.25, min(0.25, repulsionLateral))))
             // 横移動のグラデーション（滑らかさ）を前進スピードに合わせる（スピードが遅い時は横移動の反応も遅くする）
             let speedFactorForLateral = max(0.2, moving.currentSpeed / moving.speed)
-            let lateralSmoothGain: Float = isHardColliding ? min(1.0, dt * 5.0) : min(1.0, dt * 0.35 * speedFactorForLateral)
+            // ぶつかる前にスムーズに避けられるよう、通常のゲインを少し上げる (0.35 -> 1.5)
+            let lateralSmoothGain: Float = isHardColliding ? min(1.0, dt * 5.0) : min(1.0, dt * 1.5 * speedFactorForLateral)
             moving.targetLateralOffset += (targetLat - moving.targetLateralOffset) * lateralSmoothGain
             
             // 追い越し中も横移動は少しだけ速い程度に抑え、急な横スライドを避ける
@@ -2455,20 +2738,44 @@ struct HUDImmersiveView: View {
             var maxLateralStep = isOvertaking ? 0.36 * dt : 0.26 * dt
             
             // 体の向きが進行方向に対して45度を超えないように、横方向の最大移動量を前進速度に合わせて制限
-            let dynamicMaxLateralStep = vForward * dt
+            // ただし、完全に停止してしまった場合でも横へ回避（カニ歩き）できるよう最低限の横移動力を保証する
+            let dynamicMaxLateralStep = max(vForward, 0.8) * dt
             maxLateralStep = min(maxLateralStep, dynamicMaxLateralStep)
 
             let lateralDiff = moving.targetLateralOffset - moving.lateralOffset
             let lateralStep = max(-maxLateralStep, min(maxLateralStep, lateralDiff))
             moving.lateralOffset += lateralStep
 
-            let vLateralActual = dt > 0.0001 ? (lateralStep / dt) : 0
+            var vLateralActual = dt > 0.0001 ? (lateralStep / dt) : 0
             
+            // ユーザーとの絶対的な当たり判定 (Custom)
+            if isHeadAnchored {
+                let userPos2D = SIMD2<Float>(headPos.x, headPos.z)
+                let myPos2D = SIMD2<Float>(currentWorldPos.x, currentWorldPos.z)
+                let diff2D = myPos2D - userPos2D
+                let dist = simd_length(diff2D)
+                let combinedRadius = bodyRadius + 0.3
+                if dist < combinedRadius {
+                    let overlap = combinedRadius - dist
+                    let pushDir = diff2D / max(0.001, dist)
+                    let pushForward = simd_dot(pushDir, SIMD2<Float>(moving.axisDir.x, moving.axisDir.z))
+                    let pushLateral = simd_dot(pushDir, SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z))
+                    vForward += pushForward * overlap * 5.0
+                    vLateralActual += pushLateral * overlap * 5.0
+                }
+            }
             let velocityVector = moving.axisDir * vForward + moving.lateralDir * vLateralActual
             let totalSpeed = simd_length(velocityVector)
             if totalSpeed > 0.0001 {
                 let moveDir = normalize(velocityVector)
-                let targetQuat = simd_quatf(angle: atan2(moveDir.x, moveDir.z), axis: [0, 1, 0]) * simd_quatf(angle: .pi / 22, axis: [1, 0, 0])
+                var angle = atan2(moveDir.x, moveDir.z)
+                let baseAngle = atan2(moving.axisDir.x, moving.axisDir.z)
+                var diff = angle - baseAngle
+                while diff > .pi { diff -= 2 * .pi }
+                while diff < -.pi { diff += 2 * .pi }
+                diff = max(-.pi/4, min(.pi/4, diff))
+                angle = baseAngle + diff
+                let targetQuat = simd_quatf(angle: angle, axis: [0, 1, 0]) * simd_quatf(angle: .pi / 22, axis: [1, 0, 0])
                 let rotationSpeed: Float = 1.2 + (moving.currentSpeed * 20.0)
                 moving.entity.transform.rotation = simd_slerp(moving.entity.transform.rotation, targetQuat, min(1.0, dt * rotationSpeed))
             }
@@ -2682,5 +2989,576 @@ struct HUDImmersiveView: View {
                 }
             }
         }
+    }
+
+    private func updatePedestriansSFM(deltaTime: TimeInterval, dt: Float, leftPos: SIMD3<Float>, rightPos: SIMD3<Float>, isLeftAnchored: Bool, isRightAnchored: Bool, headPos: SIMD3<Float>, isHeadAnchored: Bool, speedMultiplier: Float) {
+        let wallLimitTotal = Float(panelModel.peopleHorizontalRange)
+        let yOffset = Float(panelModel.peopleHeightOffset)
+        
+        let tau: Float = 0.5 // 緩和時間
+        let A: Float = 3.0 // 対人斥力係数
+        let B: Float = 0.8 // 対人斥力の減衰距離
+        let A_wall: Float = 5.0 // 壁の斥力係数
+        let B_wall: Float = 0.2 // 壁の斥力の減衰距離
+        let A_user: Float = 4.0 // ユーザーへの斥力係数
+        let B_user: Float = 0.5 // ユーザーへの斥力の減衰距離
+        
+        struct EntitySnapshot {
+            let index: Int
+            let worldPos: SIMD3<Float>
+            let moving: MovingEntity
+            let radius: Float
+        }
+        
+        var snapshots: [EntitySnapshot] = []
+        for i in sceneData.movingEntities.indices {
+            let moving = sceneData.movingEntities[i]
+            if moving.isWaiting { continue }
+            var pos = moving.origin + moving.axisDir * moving.traveled
+            pos.y = yOffset
+            let worldPos = pos + moving.lateralDir * moving.lateralOffset
+            let physicalScale = moving.entity.scale.x / 1.8
+            let radius = 0.20 * physicalScale
+            snapshots.append(EntitySnapshot(index: i, worldPos: worldPos, moving: moving, radius: radius))
+        }
+        
+        for snapshot in snapshots {
+            let moving = snapshot.moving
+            let currentWorldPos = snapshot.worldPos
+            let v_i = moving.velocity2D
+            
+            // 1. 目的地への引力 (Driving Force) (15%減速)
+            let desiredSpeed = (moving.speed * 60.0) * speedMultiplier * 0.85
+            let e_goal = SIMD2<Float>(moving.axisDir.x, moving.axisDir.z)
+            let v_desired = e_goal * desiredSpeed
+            
+            var force = (v_desired - v_i) / tau
+            
+            // 2. 対人斥力 (Repulsive Force)
+            var isColliding = false
+            for otherSnapshot in snapshots where otherSnapshot.index != snapshot.index {
+                let diff = snapshot.worldPos - otherSnapshot.worldPos
+                let diff2D = SIMD2<Float>(diff.x, diff.z)
+                let dist = simd_length(diff2D)
+                if dist > 0.001 {
+                    let n_ij = diff2D / dist
+                    // --- 斥力を進行方向に伸ばす（楕円形） ---
+                    let physAxisDir2D = SIMD2<Float>(moving.axisDir.x, moving.axisDir.z)
+                    let physLateralDir2D = SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z)
+                    let forwardDist = -simd_dot(diff2D, physAxisDir2D) // 相手が自分の前方ならプラス
+                    let lateralDist = simd_dot(diff2D, physLateralDir2D)
+                    var effectiveDist = dist
+                    if forwardDist > 0 {
+                        // 前方の距離を短く見積もることで、遠くからでも強い斥力を生ませる
+                        effectiveDist = sqrt((forwardDist * 0.4) * (forwardDist * 0.4) + lateralDist * lateralDist)
+                    }
+                    let d_ij = effectiveDist - (snapshot.radius + otherSnapshot.radius)
+                    
+                    // 視野ファクター：後ろにいる人からの影響は小さくする
+                    var dotProd: Float = 1.0
+                    if simd_length_squared(v_i) > 0.001 {
+                        dotProd = simd_dot(n_ij, simd_normalize(v_i))
+                    }
+                    let viewFactor: Float = dotProd > -0.1 ? 1.0 : 0.3
+                    
+                    // 接触時 (d_ij < 0) は強力なバネ的斥力を追加して突き抜けを防止
+                    if d_ij < 0 { isColliding = true }
+                    let penetrationForce = d_ij < 0 ? A * 20.0 * (-d_ij) : 0.0
+                    let magnitude = A * exp(-max(0, d_ij) / B) * viewFactor + penetrationForce
+                    
+                    // 正面衝突（お見合い）の場合は横に弾き飛ばす力を追加（対称性の打破）
+                    var pushDir = n_ij
+                    if abs(pushDir.x) < 0.2 {
+                        let avoidSign: Float = moving.lateralOffset >= 0 ? 1.0 : -1.0
+                        pushDir.x += avoidSign * 0.5
+                        pushDir = simd_normalize(pushDir)
+                    }
+                    
+                    force += magnitude * pushDir
+                }
+            }
+            
+            // 3. 壁の斥力 (Wall Repulsion)
+            let rightWallDist = wallLimitTotal - moving.lateralOffset
+            let leftWallDist = moving.lateralOffset - (-wallLimitTotal)
+            let wallLateralDir2D = SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z)
+            
+            if rightWallDist > 0 {
+                let magnitude = A_wall * exp(-rightWallDist / B_wall)
+                force += magnitude * (-wallLateralDir2D)
+            }
+            if leftWallDist > 0 {
+                let magnitude = A_wall * exp(-leftWallDist / B_wall)
+                force += magnitude * (wallLateralDir2D)
+            }
+            
+            // 4. ユーザーからの斥力
+            if isHeadAnchored {
+                let userPos2D = SIMD2<Float>(headPos.x, headPos.z)
+                let myPos2D = SIMD2<Float>(currentWorldPos.x, currentWorldPos.z)
+                let diff2D = myPos2D - userPos2D
+                let dist = simd_length(diff2D)
+                if dist > 0.001 {
+                    let n_ij = diff2D / dist
+                    let bodyRadius: Float = 0.25
+                    let d_ij = dist - (snapshot.radius + bodyRadius)
+                    let magnitude = A_user * exp(-max(0, d_ij) / B_user)
+                    force += magnitude * n_ij
+                }
+            }
+            
+            // 加速度による速度更新
+            moving.velocity2D += force * dt
+            
+            // 速度の制限
+
+            let speedSq = simd_length_squared(moving.velocity2D)
+            let maxSpeed = desiredSpeed * 1.5
+            if speedSq > maxSpeed * maxSpeed {
+                moving.velocity2D = simd_normalize(moving.velocity2D) * maxSpeed
+            }
+            
+            // 物理的な横方向の速度を前進速度の100% (45度) までに制限する
+            let physAxisDir2D = SIMD2<Float>(moving.axisDir.x, moving.axisDir.z)
+            let physLateralDir2D = SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z)
+            var vForward = simd_dot(moving.velocity2D, physAxisDir2D)
+            var vLateral = simd_dot(moving.velocity2D, physLateralDir2D)
+            
+            // ぶつかっても反転（後ろ歩き）しないように下限を0にする（止まることを許可）
+            vForward = max(0.0, vForward)
+            
+            // 人混みでやむを得ず立ち止まりそうになった場合（詰まった場合）は45度制限を解除し、カニ歩きで逃げられるようにする
+            let lateralSpeedLimit = (vForward < desiredSpeed * 0.5) ? (desiredSpeed * 0.6) : (max(0.1, vForward) * 1.0)
+            if abs(vLateral) > lateralSpeedLimit {
+                vLateral = (vLateral > 0 ? Float(1.0) : Float(-1.0)) * lateralSpeedLimit
+            }
+            moving.velocity2D = physAxisDir2D * vForward + physLateralDir2D * vLateral
+
+            
+            // 位置の更新
+            let delta2D = moving.velocity2D * dt
+            let forwardMove = simd_dot(delta2D, SIMD2<Float>(moving.axisDir.x, moving.axisDir.z))
+            let lateralMove = simd_dot(delta2D, SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z))
+            
+            moving.traveled += forwardMove
+            moving.lateralOffset += lateralMove
+            moving.targetLateralOffset = moving.lateralOffset
+            moving.currentSpeed = simd_length(moving.velocity2D) / speedMultiplier
+            
+            var newPos = moving.origin + moving.axisDir * moving.traveled
+            newPos.y = yOffset
+            let finalWorldPos = newPos + moving.lateralDir * moving.lateralOffset
+            
+            moving.entity.position = finalWorldPos
+            moving.animationController?.speed = (moving.currentSpeed / 1.2) * speedMultiplier
+            
+            if simd_length_squared(moving.velocity2D) > 0.0001 {
+                let moveDir = normalize(SIMD3<Float>(moving.velocity2D.x, 0, moving.velocity2D.y))
+                let angle = atan2(moveDir.x, moveDir.z)
+                let targetQuat = simd_quatf(angle: angle, axis: [0, 1, 0]) * simd_quatf(angle: .pi / 22, axis: [1, 0, 0])
+                moving.entity.transform.rotation = simd_slerp(moving.entity.transform.rotation, targetQuat, min(1.0, dt * 10.0))
+            }
+            
+            if moving.traveled >= moving.travelLimit {
+                moving.entity.removeFromParent()
+                moving.visualGroup?.removeFromParent()
+                moving.visualGroup = nil
+                moving.isWaiting = true
+            }
+        }
+        sceneData.movingEntities.removeAll { $0.isWaiting }
+    }
+
+    private func updatePedestriansRVO(deltaTime: TimeInterval, dt: Float, leftPos: SIMD3<Float>, rightPos: SIMD3<Float>, isLeftAnchored: Bool, isRightAnchored: Bool, headPos: SIMD3<Float>, isHeadAnchored: Bool, speedMultiplier: Float) {
+        let wallLimitTotal = Float(panelModel.peopleHorizontalRange)
+        let yOffset = Float(panelModel.peopleHeightOffset)
+        let timeHorizon: Float = 3.0 // 何秒先までの衝突を考慮するか
+        let maxSpeedFactor: Float = 1.3
+        
+        struct EntitySnapshot {
+            let index: Int
+            let worldPos: SIMD3<Float>
+            let moving: MovingEntity
+            let radius: Float
+            let vel: SIMD2<Float>
+        }
+        
+        var snapshots: [EntitySnapshot] = []
+        for i in sceneData.movingEntities.indices {
+            let moving = sceneData.movingEntities[i]
+            if moving.isWaiting { continue }
+            var pos = moving.origin + moving.axisDir * moving.traveled
+            pos.y = yOffset
+            let worldPos = pos + moving.lateralDir * moving.lateralOffset
+            let physicalScale = moving.entity.scale.x / 1.8
+            let radius = 0.20 * physicalScale
+            snapshots.append(EntitySnapshot(index: i, worldPos: worldPos, moving: moving, radius: radius, vel: moving.velocity2D))
+        }
+        
+        for snapshot in snapshots {
+            let moving = snapshot.moving
+            let currentWorldPos = snapshot.worldPos
+            let myPos2D = SIMD2<Float>(currentWorldPos.x, currentWorldPos.z)
+            let myRad = snapshot.radius
+            let currentVel = moving.velocity2D
+            
+            // 目標速度 (15%減速)
+            let desiredSpeed = (moving.speed * 60.0) * speedMultiplier * 0.85
+            let e_goal = SIMD2<Float>(moving.axisDir.x, moving.axisDir.z)
+            let prefVel = e_goal * desiredSpeed
+            
+            // 速度空間のサンプリング
+            let sampleCount = 30
+            var isColliding = false
+            var bestVel = currentVel
+            var minPenalty: Float = Float.greatestFiniteMagnitude
+            
+            for i in 0..<sampleCount {
+                // 円板上のランダムまたは一様なサンプリング
+                let r = sqrt(sceneData.randomGen.nextFloat()) * (desiredSpeed * maxSpeedFactor)
+                let theta = sceneData.randomGen.nextFloat() * 2.0 * .pi
+                var candVel = prefVel
+                if i > 0 { // 0番目はpreferredVelocityをテスト
+                    candVel = SIMD2<Float>(cos(theta), sin(theta)) * r
+                }
+                
+                // 1. 目標速度との差によるペナルティ
+                let diffToPref = simd_length(candVel - prefVel)
+                var penalty = diffToPref * 1.0
+                
+                // (慣性ペナルティは本来のRVOアルゴリズムにはないため削除)
+                
+                // 3. 他の歩行者とのTTC(Time To Collision)ペナルティ
+                var minTTC = timeHorizon
+                for other in snapshots where other.index != snapshot.index {
+                    let relPos = SIMD2<Float>(other.worldPos.x, other.worldPos.z) - myPos2D
+                    // 互いの責任を半々にする (Reciprocal) ため、相手の速度の平均を考慮
+                    // candVelとother.velの相対速度
+                    let relVel = candVel - other.vel
+                    let combinedRad = myRad + other.radius + 0.1 // 安全マージン
+                    
+                    let a = simd_length_squared(relVel)
+                    let b = -2.0 * simd_dot(relVel, relPos)
+                    let c = simd_length_squared(relPos) - combinedRad * combinedRad
+                    
+                    if c < 0 {
+                        // 既に衝突している場合、相手に向かう速度ほど大きなペナルティ
+                        let approachSpeed = -simd_dot(relVel, simd_normalize(relPos))
+                        if approachSpeed > 0 {
+                            penalty += approachSpeed * 100.0
+                        }
+                        isColliding = true
+                        minTTC = 0.0
+                        break
+                    }
+                    if a > 0.0001 && b > 0 {
+                        let discriminant = b * b - 4 * a * c
+                        if discriminant > 0 {
+                            let t = (b - sqrt(discriminant)) / (2 * a)
+                            if t > 0 && t < minTTC {
+                                minTTC = t
+                            }
+                        }
+                    }
+                }
+                
+                // ユーザーとのTTC
+                if isHeadAnchored {
+                    let userPos2D = SIMD2<Float>(headPos.x, headPos.z)
+                    let relPos = userPos2D - myPos2D
+                    let relVel = candVel // ユーザーは静止または独自の動きとみなす
+                    let combinedRad = myRad + 0.25 + 0.2 // マージン大きめ
+                    
+                    let a = simd_length_squared(relVel)
+                    if a > 0.0001 {
+                        let b = -2.0 * simd_dot(relVel, relPos)
+                        let c = simd_length_squared(relPos) - combinedRad * combinedRad
+                        
+                        if c < 0 { minTTC = 0.0 }
+                        else if b > 0 {
+                            let discriminant = b * b - 4 * a * c
+                            if discriminant > 0 {
+                                let t = (b - sqrt(discriminant)) / (2 * a)
+                                if t > 0 && t < minTTC { minTTC = t }
+                            }
+                        }
+                    }
+                }
+                
+                // 壁との衝突予測 (横方向の制限)
+                // 横方向の速度成分
+                let lateralVel = simd_dot(candVel, SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z))
+                if lateralVel > 0 {
+                    let distToWall = wallLimitTotal - moving.lateralOffset
+                    let t = distToWall / lateralVel
+                    if t > 0 && t < minTTC { minTTC = t }
+                } else if lateralVel < 0 {
+                    let distToWall = moving.lateralOffset - (-wallLimitTotal)
+                    let t = distToWall / abs(lateralVel)
+                    if t > 0 && t < minTTC { minTTC = t }
+                }
+                
+                if minTTC < timeHorizon {
+                    penalty += (timeHorizon - minTTC) * 5.0 / max(0.01, minTTC)
+                }
+                
+                // 進行方向への逆走ペナルティ（後ろに戻らないようにする）
+                if simd_dot(candVel, e_goal) < -0.1 {
+                    penalty += 10.0
+                }
+                
+                if penalty < minPenalty {
+                    minPenalty = penalty
+                    bestVel = candVel
+                }
+            }
+            
+            // 速度の更新（滑らかに）
+            moving.velocity2D += (bestVel - moving.velocity2D) * min(1.0, dt * 5.0)
+            
+            // 位置の更新
+            let delta2D = moving.velocity2D * dt
+            let forwardMove = simd_dot(delta2D, SIMD2<Float>(moving.axisDir.x, moving.axisDir.z))
+            let lateralMove = simd_dot(delta2D, SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z))
+            
+            moving.traveled += forwardMove
+            moving.lateralOffset += lateralMove
+            moving.targetLateralOffset = moving.lateralOffset
+            moving.currentSpeed = simd_length(moving.velocity2D) / speedMultiplier
+            
+            var newPos = moving.origin + moving.axisDir * moving.traveled
+            newPos.y = yOffset
+            let finalWorldPos = newPos + moving.lateralDir * moving.lateralOffset
+            
+            moving.entity.position = finalWorldPos
+            moving.animationController?.speed = (moving.currentSpeed / 1.2) * speedMultiplier
+            
+            if simd_length_squared(moving.velocity2D) > 0.0001 {
+                let moveDir = normalize(SIMD3<Float>(moving.velocity2D.x, 0, moving.velocity2D.y))
+                let angle = atan2(moveDir.x, moveDir.z)
+                let targetQuat = simd_quatf(angle: angle, axis: [0, 1, 0]) * simd_quatf(angle: .pi / 22, axis: [1, 0, 0])
+                moving.entity.transform.rotation = simd_slerp(moving.entity.transform.rotation, targetQuat, min(1.0, dt * 10.0))
+            }
+            
+            if moving.traveled >= moving.travelLimit {
+                moving.entity.removeFromParent()
+                moving.visualGroup?.removeFromParent()
+                moving.visualGroup = nil
+                moving.isWaiting = true
+            }
+        }
+        sceneData.movingEntities.removeAll { $0.isWaiting }
+    }
+    
+    private func updatePedestriansHybrid(deltaTime: TimeInterval, dt: Float, leftPos: SIMD3<Float>, rightPos: SIMD3<Float>, isLeftAnchored: Bool, isRightAnchored: Bool, headPos: SIMD3<Float>, isHeadAnchored: Bool, speedMultiplier: Float) {
+        let wallLimitTotal = Float(panelModel.peopleHorizontalRange)
+        let yOffset = Float(panelModel.peopleHeightOffset)
+        
+        let tau: Float = 0.5
+        let A: Float = 3.0
+        let B: Float = 0.4
+        let A_wall: Float = 5.0
+        let B_wall: Float = 0.2
+        let A_user: Float = 4.0
+        let B_user: Float = 0.5
+        
+        struct EntitySnapshot {
+            let index: Int
+            let worldPos: SIMD3<Float>
+            let moving: MovingEntity
+            let radius: Float
+        }
+        
+        var snapshots: [EntitySnapshot] = []
+        for i in sceneData.movingEntities.indices {
+            let moving = sceneData.movingEntities[i]
+            if moving.isWaiting { continue }
+            var pos = moving.origin + moving.axisDir * moving.traveled
+            pos.y = yOffset
+            let worldPos = pos + moving.lateralDir * moving.lateralOffset
+            let physicalScale = moving.entity.scale.x / 1.8
+            let radius = 0.20 * physicalScale
+            snapshots.append(EntitySnapshot(index: i, worldPos: worldPos, moving: moving, radius: radius))
+        }
+        
+        for snapshot in snapshots {
+            let moving = snapshot.moving
+            let currentWorldPos = snapshot.worldPos
+            let v_i = moving.velocity2D
+            
+            // 1. 目的地への引力 (Driving Force)
+            // ハイブリッドモデルでは速度を10%程度抑えてより落ち着いた動きに
+            let desiredSpeed = (moving.speed * 60.0) * speedMultiplier * 0.75
+            let e_goal = SIMD2<Float>(moving.axisDir.x, moving.axisDir.z)
+            let v_desired = e_goal * desiredSpeed
+            
+            var force = (v_desired - v_i) / tau
+            
+            // 2. 早期のすれ違い回避 (Predictive Dodging)
+            // 前方の対向者や遅い人を検知して早めに横へ避ける力を加える
+            var dodgeForce = SIMD2<Float>(0, 0)
+            var isColliding = false
+            for otherSnapshot in snapshots where otherSnapshot.index != snapshot.index {
+                let diff = otherSnapshot.worldPos - snapshot.worldPos
+                let forwardDist = simd_dot(diff, moving.axisDir)
+                let lateralDist = simd_dot(diff, moving.lateralDir)
+                
+                // 1.5m 〜 7.0m 前方にいる人に対して反応
+                if forwardDist > 1.5 && forwardDist < 7.0 {
+                    let combinedRadius = snapshot.radius + otherSnapshot.radius + 0.6 // 余裕を持たせる
+                    if abs(lateralDist) < combinedRadius {
+                        // 向かい合っている（対向している）か、相手が遅い場合のみ避ける
+                        let otherVel = otherSnapshot.moving.velocity2D
+                        let relVel = v_i - otherVel
+                        let axisDir2D = SIMD2<Float>(moving.axisDir.x, moving.axisDir.z)
+                        let approachSpeed = simd_dot(relVel, axisDir2D)
+                        
+                        if approachSpeed > 0.1 { // 近づいている場合のみ
+                            let dodgeDir = lateralDist >= 0 ? -moving.lateralDir : moving.lateralDir
+                            // ドッジ（回避）の力を強めて、早期に確実に横へ避けるようにする
+                            let dodgeMagnitude: Float = 3.0 * approachSpeed / max(0.5, forwardDist)
+                            dodgeForce += SIMD2<Float>(dodgeDir.x, dodgeDir.z) * dodgeMagnitude
+                        }
+                    }
+                }
+            }
+            force += dodgeForce
+            
+            // 3. レーン維持力 (Lane Keeping)
+            // 自分が最初に割り当てられたレーン（initialPreferredOffset）に緩やかに戻ろうとする力
+            let laneError = moving.initialPreferredOffset - moving.lateralOffset
+            // ダンピングを追加して左右の揺れ（振動）を防ぐ
+            let lateralVel = simd_dot(v_i, SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z))
+            let laneForceMagnitude = laneError * 1.5 - lateralVel * 1.5
+            let laneForce = SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z) * laneForceMagnitude
+            force += laneForce
+            
+            // 4. 対人斥力 (Social Force) - 近距離での衝突回避
+            for otherSnapshot in snapshots where otherSnapshot.index != snapshot.index {
+                let diff = snapshot.worldPos - otherSnapshot.worldPos
+                let diff2D = SIMD2<Float>(diff.x, diff.z)
+                let dist = simd_length(diff2D)
+                if dist > 0.001 {
+                    let n_ij = diff2D / dist
+                    let d_ij = dist - (snapshot.radius + otherSnapshot.radius)
+                    var dotProd: Float = 1.0
+                    if simd_length_squared(v_i) > 0.001 {
+                        dotProd = simd_dot(n_ij, simd_normalize(v_i))
+                    }
+                    let viewFactor: Float = dotProd > -0.1 ? 1.0 : 0.3
+                    
+                    // 接触時 (d_ij < 0) は強力なバネ的斥力を追加して突き抜けを防止
+                    if d_ij < 0 { isColliding = true }
+                    let penetrationForce = d_ij < 0 ? A * 20.0 * (-d_ij) : 0.0
+                    let magnitude = A * exp(-max(0, d_ij) / B) * viewFactor + penetrationForce
+                    
+                    // 正面衝突（お見合い）の場合は横に弾き飛ばす力を追加（対称性の打破）
+                    var pushDir = n_ij
+                    if abs(pushDir.x) < 0.2 {
+                        let avoidSign: Float = moving.lateralOffset >= 0 ? 1.0 : -1.0
+                        pushDir.x += avoidSign * 0.5
+                        pushDir = simd_normalize(pushDir)
+                    }
+                    
+                    force += magnitude * pushDir
+                }
+            }
+            
+            // 5. 壁からの斥力
+            let rightWallDist = wallLimitTotal - moving.lateralOffset
+            let leftWallDist = moving.lateralOffset - (-wallLimitTotal)
+            let lateralDir2D = SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z)
+            
+            if rightWallDist > 0 {
+                let magnitude = A_wall * exp(-rightWallDist / B_wall)
+                force += magnitude * (-lateralDir2D)
+            }
+            if leftWallDist > 0 {
+                let magnitude = A_wall * exp(-leftWallDist / B_wall)
+                force += magnitude * lateralDir2D
+            }
+            
+            // 6. ユーザーからの絶対的な当たり判定・斥力
+            if isHeadAnchored {
+                let userPos2D = SIMD2<Float>(headPos.x, headPos.z)
+                let myPos2D = SIMD2<Float>(currentWorldPos.x, currentWorldPos.z)
+                let diff2D = myPos2D - userPos2D
+                let dist = simd_length(diff2D)
+                if dist > 0.001 {
+                    let n_ij = diff2D / dist
+                    let bodyRadius: Float = 0.3
+                    let d_ij = dist - (snapshot.radius + bodyRadius)
+                    if d_ij < 0 { isColliding = true }
+                    // 接触時は強力な剛体ペナルティ
+                    let penetrationForce = d_ij < 0 ? A_user * 30.0 * (-d_ij) : 0.0
+                    let magnitude = A_user * exp(-max(0, d_ij) / B_user) + penetrationForce
+                    force += magnitude * n_ij
+                }
+            }
+            
+            // 速度の更新
+            moving.velocity2D += force * dt
+            
+
+            let speedSq = simd_length_squared(moving.velocity2D)
+            let maxSpeed = desiredSpeed * 1.5
+            if speedSq > maxSpeed * maxSpeed {
+                moving.velocity2D = simd_normalize(moving.velocity2D) * maxSpeed
+            }
+            
+            // 物理的な横方向の速度を前進速度の100% (45度) までに制限する
+            let physAxisDir2D = SIMD2<Float>(moving.axisDir.x, moving.axisDir.z)
+            let physLateralDir2D = SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z)
+            var vForward = simd_dot(moving.velocity2D, physAxisDir2D)
+            var vLateral = simd_dot(moving.velocity2D, physLateralDir2D)
+            
+            // ぶつかっても反転（後ろ歩き）しないように下限を0にする（止まることを許可）
+            vForward = max(0.0, vForward)
+            
+            // 人混みでやむを得ず立ち止まりそうになった場合（詰まった場合）は45度制限を解除し、カニ歩きで逃げられるようにする
+            let lateralSpeedLimit = (vForward < desiredSpeed * 0.5) ? (desiredSpeed * 0.6) : (max(0.1, vForward) * 1.0)
+            if abs(vLateral) > lateralSpeedLimit {
+                vLateral = (vLateral > 0 ? Float(1.0) : Float(-1.0)) * lateralSpeedLimit
+            }
+            moving.velocity2D = physAxisDir2D * vForward + physLateralDir2D * vLateral
+
+            
+            let delta2D = moving.velocity2D * dt
+            let forwardMove = simd_dot(delta2D, SIMD2<Float>(moving.axisDir.x, moving.axisDir.z))
+            let lateralMove = simd_dot(delta2D, SIMD2<Float>(moving.lateralDir.x, moving.lateralDir.z))
+            
+            moving.traveled += forwardMove
+            moving.lateralOffset += lateralMove
+            moving.targetLateralOffset = moving.lateralOffset
+            moving.currentSpeed = simd_length(moving.velocity2D) / speedMultiplier
+            
+            var newPos = moving.origin + moving.axisDir * moving.traveled
+            newPos.y = yOffset
+            let finalWorldPos = newPos + moving.lateralDir * moving.lateralOffset
+            
+            moving.entity.position = finalWorldPos
+            moving.animationController?.speed = (moving.currentSpeed / 1.2) * speedMultiplier
+            
+            if simd_length_squared(moving.velocity2D) > 0.0001 {
+                let moveDir = normalize(SIMD3<Float>(moving.velocity2D.x, 0, moving.velocity2D.y))
+                var angle = atan2(moveDir.x, moveDir.z)
+                let baseAngle = atan2(moving.axisDir.x, moving.axisDir.z)
+                var diff = angle - baseAngle
+                while diff > .pi { diff -= 2 * .pi }
+                while diff < -.pi { diff += 2 * .pi }
+                diff = max(-.pi/4, min(.pi/4, diff))
+                angle = baseAngle + diff
+                let targetQuat = simd_quatf(angle: angle, axis: [0, 1, 0]) * simd_quatf(angle: .pi / 22, axis: [1, 0, 0])
+                moving.entity.transform.rotation = simd_slerp(moving.entity.transform.rotation, targetQuat, min(1.0, dt * 10.0))
+            }
+            
+            if moving.traveled >= moving.travelLimit {
+                moving.entity.removeFromParent()
+                moving.visualGroup?.removeFromParent()
+                moving.visualGroup = nil
+                moving.isWaiting = true
+            }
+        }
+        sceneData.movingEntities.removeAll { $0.isWaiting }
     }
 }

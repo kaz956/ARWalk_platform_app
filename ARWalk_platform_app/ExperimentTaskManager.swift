@@ -287,12 +287,18 @@ final class ExperimentTaskManager: ObservableObject {
         if conditionNumber == 12 {
             conditionNumber = 1
             let currentLOS = panelModel.currentLOSLabel
-            if currentLOS == "LOS_E_F" {
-                panelModel.peopleSpawnInterval = panelModel.tCD
-            } else if currentLOS == "LOS_C_D" {
-                panelModel.peopleSpawnInterval = panelModel.tAB
+            if currentLOS == "LOS_F" {
+                panelModel.peopleSpawnInterval = panelModel.tA
+            } else if currentLOS == "LOS_A" {
+                panelModel.peopleSpawnInterval = panelModel.tB
+            } else if currentLOS == "LOS_B" {
+                panelModel.peopleSpawnInterval = panelModel.tC
+            } else if currentLOS == "LOS_C" {
+                panelModel.peopleSpawnInterval = panelModel.tD
+            } else if currentLOS == "LOS_D" {
+                panelModel.peopleSpawnInterval = panelModel.tE
             } else {
-                panelModel.peopleSpawnInterval = panelModel.tEF
+                panelModel.peopleSpawnInterval = panelModel.tF
             }
         } else {
             conditionNumber = min(12, conditionNumber + 1)
@@ -449,12 +455,19 @@ final class ExperimentTaskManager: ObservableObject {
         }
 
         if entityName == "Crowd.Toggle" {
-            if abs(panelModel.peopleSpawnInterval - panelModel.tAB) < 0.1 {
-                panelModel.peopleSpawnInterval = panelModel.tCD
-            } else if abs(panelModel.peopleSpawnInterval - panelModel.tCD) < 0.1 {
-                panelModel.peopleSpawnInterval = panelModel.tEF
+            let iv = panelModel.peopleSpawnInterval
+            if abs(iv - panelModel.tA) < 0.1 {
+                panelModel.peopleSpawnInterval = panelModel.tB
+            } else if abs(iv - panelModel.tB) < 0.1 {
+                panelModel.peopleSpawnInterval = panelModel.tC
+            } else if abs(iv - panelModel.tC) < 0.1 {
+                panelModel.peopleSpawnInterval = panelModel.tD
+            } else if abs(iv - panelModel.tD) < 0.1 {
+                panelModel.peopleSpawnInterval = panelModel.tE
+            } else if abs(iv - panelModel.tE) < 0.1 {
+                panelModel.peopleSpawnInterval = panelModel.tF
             } else {
-                panelModel.peopleSpawnInterval = panelModel.tAB
+                panelModel.peopleSpawnInterval = panelModel.tA
             }
             bumpHUD()
             return
