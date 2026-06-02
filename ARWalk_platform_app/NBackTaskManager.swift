@@ -115,7 +115,7 @@ final class NBackTaskManager: ObservableObject, ExperimentalSubTask {
                 elapsedTime: elapsedTime,
                 eventType: "nback_spawn",
                 taskType: .nBack,
-                rule: "\(config.nValue)-back で色を回答",
+                rule: "\(config.nValue)-back color match",
                 detail1: color.rawValue,
                 detail2: String(stimulus.sequenceIndex)
             )
@@ -151,7 +151,7 @@ final class NBackTaskManager: ObservableObject, ExperimentalSubTask {
                         elapsedTime: elapsedTime,
                         eventType: isCorrect ? "nback_correct" : "nback_wrong",
                         taskType: .nBack,
-                        rule: "\(config.nValue)-back で色を回答",
+                        rule: "\(config.nValue)-back color match",
                         isCorrect: isCorrect ? "true" : "false",
                         reactionTime: Date().timeIntervalSince(stimulus.spawnedAt),
                         detail1: stimulus.color.rawValue,
@@ -167,7 +167,7 @@ final class NBackTaskManager: ObservableObject, ExperimentalSubTask {
                         elapsedTime: elapsedTime,
                         eventType: "nback_miss",
                         taskType: .nBack,
-                        rule: "\(config.nValue)-back で色を回答",
+                        rule: "\(config.nValue)-back color match",
                         isCorrect: "false",
                         detail1: stimulus.color.rawValue,
                         detail2: String(stimulus.sequenceIndex)

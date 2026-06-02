@@ -11,9 +11,5 @@
 		<key>UISceneConfigurations</key>
 		<dict/>
 	</dict>
-	<key>NSWorldSensingUsageDescription</key>
-	<string>歩行中の位置と向きを取得し、衝突判定を行うために使用します。</string>
-	<key>NSHandsTrackingUsageDescription</key>
-	<string>手の位置を取得し、手と歩行者の衝突判定を行うために使用します。</string>
 </dict>
 </plist>

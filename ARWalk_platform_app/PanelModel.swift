@@ -33,8 +33,6 @@ class PanelModel: ObservableObject {
         var color: Color
         var textColor: Color = .white
         var opacity: Double
-        var useGlassmorphism: Bool = false
-        var glassRoughness: Float = 0.2
         
         var worldPosition: SIMD3<Float> {
             let d = distanceZ
@@ -61,30 +59,30 @@ class PanelModel: ObservableObject {
     }
 
     enum HUDTrackingMode: String, CaseIterable, Identifiable {
-        case pathLocked = "経路固定 (Path-Locked)"
-        case headLocked = "完全追従 (Head-Locked)"
-        case lazyFollow = "遅延追従 (Lazy Follow)"
-        case bodyLocked = "歩行方向固定 (Body-Locked)"
-        case pitchLockedYawFollow = "ピッチ固定・ヨー追従"
-        case yawLockedPitchFollow = "ヨー固定・ピッチ追従"
-        case snapFollow = "スナップ追従 (Snap Follow)"
-        case worldOriented = "位置のみ追従・向き固定"
+        case pathLocked = "Path-Locked"
+        case headLocked = "Head-Locked"
+        case lazyFollow = "Lazy Follow"
+        case bodyLocked = "Body-Locked"
+        case pitchLockedYawFollow = "Pitch-Locked, Yaw-Follow"
+        case yawLockedPitchFollow = "Yaw-Locked, Pitch-Follow"
+        case snapFollow = "Snap Follow"
+        case worldOriented = "World-Oriented"
 
         var id: String { rawValue }
     }
     
     enum PedestrianAlgorithm: String, CaseIterable, Identifiable {
-        case customLaneBased = "カスタム・レーンベース (独自)"
+        case customLaneBased = "Custom Lane-Based"
         case socialForceModel = "Social Force Model (SFM)"
-        case rvo = "ORCA / RVO (速度障害モデル)"
-        case hybrid = "ハイブリッド (SFM + 予測回避)"
+        case rvo = "ORCA / RVO"
+        case hybrid = "Hybrid (SFM + Predictive Avoidance)"
         
         var id: String { rawValue }
     }
     
     enum PedestrianDirectionMode: String, CaseIterable, Identifiable {
-        case oneWay = "一方向 (対向のみ)"
-        case twoWay = "双方向"
+        case oneWay = "One-Way (Oncoming Only)"
+        case twoWay = "Two-Way"
 
         var id: String { rawValue }
     }
@@ -95,37 +93,37 @@ class PanelModel: ObservableObject {
             id: "Whack",
             angleX: 0.0, angleY: -10.0, distanceZ: 2.0,
             aspectRatio: 16.0 / 9.0, vofDegrees: 40.0,
-            isVisible: false, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2
+            isVisible: false, color: .black, textColor: .white, opacity: 0.5
         ),
         PanelInfo(
             id: "Calc",
             angleX: 0.0, angleY: -10.0, distanceZ: 2.0,
             aspectRatio: 16.0 / 9.0, vofDegrees: 40.0,
-            isVisible: false, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2
+            isVisible: false, color: .black, textColor: .white, opacity: 0.5
         ),
         PanelInfo(
             id: "Input",
             angleX: 0.0, angleY: -10.0, distanceZ: 2.0,
             aspectRatio: 16.0 / 9.0, vofDegrees: 40.0,
-            isVisible: true, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2
+            isVisible: true, color: .black, textColor: .white, opacity: 0.5
         ),
         PanelInfo(
             id: "Explore",
             angleX: 0.0, angleY: -10.0, distanceZ: 2.0,
             aspectRatio: 16.0 / 9.0, vofDegrees: 60.0,
-            isVisible: false, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2
+            isVisible: false, color: .black, textColor: .white, opacity: 0.5
         ),
         PanelInfo(
             id: "NBack",
             angleX: 0.0, angleY: -10.0, distanceZ: 2.0,
             aspectRatio: 16.0 / 9.0, vofDegrees: 40.0,
-            isVisible: false, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2
+            isVisible: false, color: .black, textColor: .white, opacity: 0.5
         ),
         PanelInfo(
             id: "Notes",
             angleX: 0.0, angleY: -10.0, distanceZ: 2.0,
             aspectRatio: 9.0 / 16.0, vofDegrees: 20.0,
-            isVisible: false, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2
+            isVisible: false, color: .black, textColor: .white, opacity: 0.5
         )
     ]
     
@@ -246,12 +244,12 @@ class PanelModel: ObservableObject {
 
     func resetPanelsToDefault() {
         panels = [
-            PanelInfo(id: "Whack", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 16.0 / 9.0, vofDegrees: 40.0, isVisible: false, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2),
-            PanelInfo(id: "Calc", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 16.0 / 9.0, vofDegrees: 40.0, isVisible: false, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2),
-            PanelInfo(id: "Input", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 16.0 / 9.0, vofDegrees: 40.0, isVisible: true, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2),
-            PanelInfo(id: "Explore", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 16.0 / 9.0, vofDegrees: 60.0, isVisible: false, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2),
-            PanelInfo(id: "NBack", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 16.0 / 9.0, vofDegrees: 40.0, isVisible: false, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2),
-            PanelInfo(id: "Notes", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 9.0 / 16.0, vofDegrees: 20.0, isVisible: false, color: .black, textColor: .white, opacity: 0.5, useGlassmorphism: false, glassRoughness: 0.2)
+            PanelInfo(id: "Whack", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 16.0 / 9.0, vofDegrees: 40.0, isVisible: false, color: .black, textColor: .white, opacity: 0.5),
+            PanelInfo(id: "Calc", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 16.0 / 9.0, vofDegrees: 40.0, isVisible: false, color: .black, textColor: .white, opacity: 0.5),
+            PanelInfo(id: "Input", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 16.0 / 9.0, vofDegrees: 40.0, isVisible: true, color: .black, textColor: .white, opacity: 0.5),
+            PanelInfo(id: "Explore", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 16.0 / 9.0, vofDegrees: 60.0, isVisible: false, color: .black, textColor: .white, opacity: 0.5),
+            PanelInfo(id: "NBack", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 16.0 / 9.0, vofDegrees: 40.0, isVisible: false, color: .black, textColor: .white, opacity: 0.5),
+            PanelInfo(id: "Notes", angleX: 0.0, angleY: -10.0, distanceZ: 2.0, aspectRatio: 9.0 / 16.0, vofDegrees: 20.0, isVisible: false, color: .black, textColor: .white, opacity: 0.5)
         ]
     }
     

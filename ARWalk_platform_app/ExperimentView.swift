@@ -50,7 +50,7 @@ struct ExperimentView: View {
             defaultFilename: exportDocument.suggestedFilename
         ) { result in
             if case .failure(let error) = result {
-                experimentManager.errorMessage = "CSV の書き出しに失敗しました: \(error.localizedDescription)"
+                experimentManager.errorMessage = "Failed to export CSV: \(error.localizedDescription)"
             }
         }
     }
@@ -82,19 +82,19 @@ struct ExperimentView: View {
 
     private var experimentControls: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("実験管理")
+            Text("Experiment Control")
                 .font(.headline)
 
             HStack(spacing: 20) {
                 StepperCard(
-                    title: "参加者ID",
+                    title: "Participant ID",
                     valueText: experimentManager.participantIDText,
                     onDecrement: experimentManager.decrementParticipant,
                     onIncrement: experimentManager.incrementParticipant
                 )
 
                 StepperCard(
-                    title: "条件ID",
+                    title: "Condition ID",
                     valueText: experimentManager.conditionIDText,
                     subtitleText: experimentManager.conditionName,
                     onDecrement: experimentManager.decrementCondition,
@@ -115,7 +115,7 @@ struct ExperimentView: View {
                 }
                 .disabled(!experimentManager.canEnd)
 
-                Button("当たり判定リセット") {
+                Button("Reset Collision") {
                     Task {
                         // 1. Close HUD / Immersive Space のクローズ処理
                         await dismissImmersiveSpace()
@@ -133,14 +133,14 @@ struct ExperimentView: View {
             }
 
             HStack(spacing: 18) {
-                Text("状態: \(experimentManager.statusText)")
-                Text("経過時間: \(experimentManager.elapsedTime, format: .number.precision(.fractionLength(1))) s")
-                Text("スコア: \(experimentManager.arcadeScore)")
-                Text("コンボ: \(experimentManager.comboCount)")
+                Text("Status: \(experimentManager.statusText)")
+                Text("Elapsed: \(experimentManager.elapsedTime, format: .number.precision(.fractionLength(1))) s")
+                Text("Score: \(experimentManager.arcadeScore)")
+                Text("Combo: \(experimentManager.comboCount)")
             }
             .font(.subheadline)
 
-            Text("表示が ON のタスクだけ開始・記録されます。デフォルトは Whack だけ ON です。")
+            Text("Only tasks with visible (ON) panels will be started and recorded.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
@@ -152,7 +152,7 @@ struct ExperimentView: View {
 
             if let summaryFile = experimentManager.exportedSummaryFile {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("サマリファイルを書き出す")
+                    Text("Export Summary File")
                         .font(.subheadline.bold())
 
                     Button {
@@ -172,12 +172,12 @@ struct ExperimentView: View {
 
     private var taskConfigControls: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("タスク設定")
+            Text("Task Settings")
                 .font(.headline)
 
             // 1枚目のゲーム用パラメータ
             VStack(alignment: .leading) {
-                Text(String(format: "ゲーム: 出現間隔 %.1f 秒", experimentManager.selectiveConfig.spawnInterval))
+                Text(String(format: "Game: Spawn Interval %.1f s", experimentManager.selectiveConfig.spawnInterval))
                 Slider(value: $experimentManager.selectiveConfig.spawnInterval, in: 0.3...2.0, step: 0.1)
                     .onChange(of: experimentManager.selectiveConfig.spawnInterval) { _ in
                         experimentManager.refreshConfigurations()
@@ -185,7 +185,7 @@ struct ExperimentView: View {
             }
 
             VStack(alignment: .leading) {
-                Text(String(format: "ゲーム: 表示時間 %.1f 秒", experimentManager.selectiveConfig.displayDuration))
+                Text(String(format: "Game: Display Duration %.1f s", experimentManager.selectiveConfig.displayDuration))
                 Slider(value: $experimentManager.selectiveConfig.displayDuration, in: 0.6...2.0, step: 0.1)
                     .onChange(of: experimentManager.selectiveConfig.displayDuration) { _ in
                         experimentManager.refreshConfigurations()
@@ -193,7 +193,7 @@ struct ExperimentView: View {
             }
 
             VStack(alignment: .leading) {
-                Text("ゲーム: 同時表示数 \(experimentManager.selectiveConfig.simultaneousTargetCount)")
+                Text("Game: Simultaneous Targets \(experimentManager.selectiveConfig.simultaneousTargetCount)")
                 Slider(
                     value: Binding(
                         get: { Double(experimentManager.selectiveConfig.simultaneousTargetCount) },
@@ -208,7 +208,7 @@ struct ExperimentView: View {
             }
 
             VStack(alignment: .leading) {
-                Text(String(format: "ゲーム: 正解ターゲット割合 %.2f", experimentManager.selectiveConfig.correctTargetRatio))
+                Text(String(format: "Game: Correct Target Ratio %.2f", experimentManager.selectiveConfig.correctTargetRatio))
                 Slider(value: $experimentManager.selectiveConfig.correctTargetRatio, in: 0.2...0.7, step: 0.05)
                     .onChange(of: experimentManager.selectiveConfig.correctTargetRatio) { _ in
                         experimentManager.refreshConfigurations()
@@ -219,7 +219,7 @@ struct ExperimentView: View {
 
             // 2枚目の計算パネル用パラメータ
             VStack(alignment: .leading) {
-                Text(String(format: "計算: 表示時間 %.1f 秒", experimentManager.arithmeticConfig.displayDuration))
+                Text(String(format: "Calc: Display Duration %.1f s", experimentManager.arithmeticConfig.displayDuration))
                 Slider(value: $experimentManager.arithmeticConfig.displayDuration, in: 1.0...6.0, step: 0.1)
                     .onChange(of: experimentManager.arithmeticConfig.displayDuration) { _ in
                         experimentManager.refreshConfigurations()
@@ -227,7 +227,7 @@ struct ExperimentView: View {
             }
 
             VStack(alignment: .leading) {
-                Text(String(format: "計算: 次の問題まで %.1f 秒", experimentManager.arithmeticConfig.interQuestionInterval))
+                Text(String(format: "Calc: Inter-question Interval %.1f s", experimentManager.arithmeticConfig.interQuestionInterval))
                 Slider(value: $experimentManager.arithmeticConfig.interQuestionInterval, in: 0.4...2.0, step: 0.1)
                     .onChange(of: experimentManager.arithmeticConfig.interQuestionInterval) { _ in
                         experimentManager.refreshConfigurations()
@@ -237,7 +237,7 @@ struct ExperimentView: View {
             Divider().padding(.vertical, 4)
 
             VStack(alignment: .leading) {
-                Text(String(format: "入力タスク: 制限時間 %.1f 秒", experimentManager.textEntryConfig.displayDuration))
+                Text(String(format: "Text Entry: Time Limit %.1f s", experimentManager.textEntryConfig.displayDuration))
                 Slider(value: $experimentManager.textEntryConfig.displayDuration, in: 6.0...20.0, step: 1.0)
                     .onChange(of: experimentManager.textEntryConfig.displayDuration) { _ in
                         experimentManager.refreshConfigurations()
@@ -260,7 +260,7 @@ struct ExperimentView: View {
             }
 
             VStack(alignment: .leading) {
-                Text(String(format: "n-back: 刺激表示 %.1f 秒", experimentManager.nBackConfig.stimulusDuration))
+                Text(String(format: "N-Back: Stimulus Duration %.1f s", experimentManager.nBackConfig.stimulusDuration))
                 Slider(value: $experimentManager.nBackConfig.stimulusDuration, in: 1.0...3.0, step: 0.1)
                     .onChange(of: experimentManager.nBackConfig.stimulusDuration) { _ in
                         experimentManager.refreshConfigurations()
@@ -272,20 +272,20 @@ struct ExperimentView: View {
     private var panelControls: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("HUD パネル設定")
+                Text("HUD Panel Settings")
                     .font(.headline)
                 Spacer()
                 Button(action: {
                     panelModel.resetPanelsToDefault()
                 }) {
-                    Label("デフォルトに戻す", systemImage: "arrow.uturn.backward")
+                    Label("Reset to Default", systemImage: "arrow.uturn.backward")
                         .font(.subheadline)
                 }
                 .buttonStyle(.bordered)
             }
             
             HStack(spacing: 8) {
-                Text("プリセット保存/読込:")
+                Text("Save/Load Preset:")
                     .font(.subheadline)
                 ForEach(["A", "B", "C"], id: \.self) { presetName in
                     HStack(spacing: 4) {
@@ -310,9 +310,9 @@ struct ExperimentView: View {
             .padding(.bottom, 8)
             
             VStack(alignment: .leading, spacing: 8) {
-                Text("追従パターン (Tracking Mode)")
+                Text("Follow Mode (Tracking Mode)")
                     .font(.subheadline.bold())
-                Picker("追従パターン", selection: $panelModel.trackingMode) {
+                Picker("Follow Mode", selection: $panelModel.trackingMode) {
                     ForEach(PanelModel.HUDTrackingMode.allCases) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
@@ -321,7 +321,7 @@ struct ExperimentView: View {
                 
                 if panelModel.trackingMode == .snapFollow {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(String(format: "スナップ閾値角度: %.1f°", panelModel.snapThresholdDegrees))
+                        Text(String(format: "Snap Threshold: %.1f°", panelModel.snapThresholdDegrees))
                             .font(.footnote)
                         Slider(value: $panelModel.snapThresholdDegrees, in: 10.0...90.0, step: 1.0)
                     }
@@ -333,12 +333,12 @@ struct ExperimentView: View {
             ForEach($panelModel.panels) { $panel in
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("表示", isOn: $panel.isVisible)
-                        ColorPicker("背景色", selection: $panel.color)
-                        ColorPicker("文字色", selection: $panel.textColor)
+                        Toggle("Visible", isOn: $panel.isVisible)
+                        ColorPicker("Background Color", selection: $panel.color)
+                        ColorPicker("Text Color", selection: $panel.textColor)
                         
                         HStack(spacing: 8) {
-                            Text("カラーテーマ:")
+                            Text("Color Theme:")
                                 .font(.footnote)
                             
                             Button("Dark") {
@@ -361,7 +361,7 @@ struct ExperimentView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("透過度")
+                            Text("Opacity")
                                 .font(.subheadline)
                             Slider(value: Binding(
                                 get: { Float(panel.opacity) },
@@ -370,17 +370,17 @@ struct ExperimentView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(String(format: "Yaw (左右): %.1f°", panel.angleX))
+                            Text(String(format: "Yaw (L/R): %.1f°", panel.angleX))
                             Slider(value: $panel.angleX, in: -90...90, step: 1.0)
 
-                            Text(String(format: "Pitch (上下): %.1f°", panel.angleY))
+                            Text(String(format: "Pitch (U/D): %.1f°", panel.angleY))
                             Slider(value: $panel.angleY, in: -90...90, step: 1.0)
 
-                            Text(String(format: "距離 (Z): %.2fm", panel.distanceZ))
+                            Text(String(format: "Distance (Z): %.2fm", panel.distanceZ))
                             Slider(value: $panel.distanceZ, in: 0.5...10.0, step: 0.1)
 
                             HStack {
-                                Text(String(format: "アスペクト比 (横/縦): %.2f", panel.aspectRatio))
+                                Text(String(format: "Aspect Ratio (W/H): %.2f", panel.aspectRatio))
                                 Spacer()
                                 Button(action: {
                                     panel.aspectRatio = 1.0 / panel.aspectRatio
@@ -393,22 +393,12 @@ struct ExperimentView: View {
                             Slider(value: $panel.aspectRatio, in: 0.25...4.0, step: 0.05)
                                 .padding(.bottom, 4)
 
-                            Text(String(format: "視野角 (サイズ): %.1f°", panel.vofDegrees))
+                            Text(String(format: "Field of View (Size): %.1f°", panel.vofDegrees))
                             Slider(value: $panel.vofDegrees, in: 10.0...120.0, step: 1.0)
 
                             let renderSize = panel.renderSize
-                            Text(String(format: "実寸サイズ %.2f x %.2f m", renderSize.x, renderSize.y))
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            Text(String(format: "Actual Size %.2f x %.2f m", renderSize.x, renderSize.y))
                                 
-                            Toggle("すりガラス背景 (Glassmorphism)", isOn: $panel.useGlassmorphism)
-                                .padding(.top, 4)
-                            
-                            if panel.useGlassmorphism {
-                                Text(String(format: "すりガラスの強さ: %.2f", panel.glassRoughness))
-                                    .font(.footnote)
-                                Slider(value: $panel.glassRoughness, in: 0.0...1.0, step: 0.05)
-                            }
                         }
                     }
                     .padding(.vertical, 4)
@@ -434,42 +424,42 @@ struct ExperimentView: View {
     
     private var optimalZoneControls: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("最適視野角ガイド設定")
+            Text("Optimal FoV Guide Settings")
                 .font(.headline)
             
-            Toggle("ガイドを表示する", isOn: $panelModel.optimalZone.isGuideVisible)
+            Toggle("Show Guide", isOn: $panelModel.optimalZone.isGuideVisible)
                 .padding(.bottom, 8)
             
             if panelModel.optimalZone.isGuideVisible {
-                DisclosureGroup("Z座標 (距離: m)") {
+                DisclosureGroup("Z Coordinate (Distance: m)") {
                     VStack {
-                        HStack { Text("下限"); Slider(value: $panelModel.optimalZone.minZ, in: 0.5...10.0, step: 0.1); Text(String(format: "%.2f", panelModel.optimalZone.minZ)) }
-                        HStack { Text("上限"); Slider(value: $panelModel.optimalZone.maxZ, in: 0.5...10.0, step: 0.1); Text(String(format: "%.2f", panelModel.optimalZone.maxZ)) }
-                        HStack { Text("ベース"); Slider(value: $panelModel.optimalZone.baseZ, in: 0.5...10.0, step: 0.1); Text(String(format: "%.2f", panelModel.optimalZone.baseZ)) }
+                        HStack { Text("Min"); Slider(value: $panelModel.optimalZone.minZ, in: 0.5...10.0, step: 0.1); Text(String(format: "%.2f", panelModel.optimalZone.minZ)) }
+                        HStack { Text("Max"); Slider(value: $panelModel.optimalZone.maxZ, in: 0.5...10.0, step: 0.1); Text(String(format: "%.2f", panelModel.optimalZone.maxZ)) }
+                        HStack { Text("Base"); Slider(value: $panelModel.optimalZone.baseZ, in: 0.5...10.0, step: 0.1); Text(String(format: "%.2f", panelModel.optimalZone.baseZ)) }
                     }
                 }
                 
-                DisclosureGroup("Y座標 (Pitch: 度)") {
+                DisclosureGroup("Y Coordinate (Pitch: deg)") {
                     VStack {
-                        HStack { Text("下限"); Slider(value: $panelModel.optimalZone.minPitch, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.minPitch)) }
-                        HStack { Text("上限"); Slider(value: $panelModel.optimalZone.maxPitch, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.maxPitch)) }
-                        HStack { Text("ベース"); Slider(value: $panelModel.optimalZone.basePitch, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.basePitch)) }
+                        HStack { Text("Min"); Slider(value: $panelModel.optimalZone.minPitch, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.minPitch)) }
+                        HStack { Text("Max"); Slider(value: $panelModel.optimalZone.maxPitch, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.maxPitch)) }
+                        HStack { Text("Base"); Slider(value: $panelModel.optimalZone.basePitch, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.basePitch)) }
                     }
                 }
                 
-                DisclosureGroup("X座標 (Yaw: 度)") {
+                DisclosureGroup("X Coordinate (Yaw: deg)") {
                     VStack {
-                        HStack { Text("下限"); Slider(value: $panelModel.optimalZone.minYaw, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.minYaw)) }
-                        HStack { Text("上限"); Slider(value: $panelModel.optimalZone.maxYaw, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.maxYaw)) }
-                        HStack { Text("ベース"); Slider(value: $panelModel.optimalZone.baseYaw, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.baseYaw)) }
+                        HStack { Text("Min"); Slider(value: $panelModel.optimalZone.minYaw, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.minYaw)) }
+                        HStack { Text("Max"); Slider(value: $panelModel.optimalZone.maxYaw, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.maxYaw)) }
+                        HStack { Text("Base"); Slider(value: $panelModel.optimalZone.baseYaw, in: -90...90, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.baseYaw)) }
                     }
                 }
                 
-                DisclosureGroup("サイズ・視角 (度)") {
+                DisclosureGroup("Size / FoV (deg)") {
                     VStack {
-                        HStack { Text("下限"); Slider(value: $panelModel.optimalZone.minVoF, in: 10...120, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.minVoF)) }
-                        HStack { Text("上限"); Slider(value: $panelModel.optimalZone.maxVoF, in: 10...120, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.maxVoF)) }
-                        HStack { Text("ベース"); Slider(value: $panelModel.optimalZone.baseVoF, in: 10...120, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.baseVoF)) }
+                        HStack { Text("Min"); Slider(value: $panelModel.optimalZone.minVoF, in: 10...120, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.minVoF)) }
+                        HStack { Text("Max"); Slider(value: $panelModel.optimalZone.maxVoF, in: 10...120, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.maxVoF)) }
+                        HStack { Text("Base"); Slider(value: $panelModel.optimalZone.baseVoF, in: 10...120, step: 1.0); Text(String(format: "%.1f", panelModel.optimalZone.baseVoF)) }
                     }
                 }
             }
@@ -482,7 +472,7 @@ struct ExperimentView: View {
         let avgVelocity = 0.88 * Double(panelModel.peopleSpeedMultiplier)
         
         return VStack(alignment: .leading, spacing: 12) {
-            Text("人オブジェクトの調整")
+            Text("Pedestrian Settings")
                 .font(.headline)
 
             HStack(spacing: 12) {
@@ -490,7 +480,7 @@ struct ExperimentView: View {
                     panelModel.peopleIsPlaying.toggle()
                 } label: {
                     Label(
-                        panelModel.peopleIsPlaying ? "一時停止" : "再生",
+                        panelModel.peopleIsPlaying ? "Pause" : "Play",
                         systemImage: panelModel.peopleIsPlaying ? "pause.fill" : "play.fill"
                     )
                 }
@@ -499,17 +489,17 @@ struct ExperimentView: View {
                     panelModel.resetCount += 1
                     experimentManager.collisionCount = 0
                 } label: {
-                    Label("リセット", systemImage: "arrow.clockwise")
+                    Label("Reset", systemImage: "arrow.clockwise")
                 }
 
-                Button("等速 1x") {
+                Button("1x Speed") {
                     panelModel.peopleSpeedMultiplier = 1.0
                 }
                 
                 Spacer()
                 
                 Toggle(isOn: $panelModel.showCollisionVisuals) {
-                    Label("判定の可視化", systemImage: panelModel.showCollisionVisuals ? "eye.fill" : "eye.slash.fill")
+                    Label("Show Collision", systemImage: panelModel.showCollisionVisuals ? "eye.fill" : "eye.slash.fill")
                 }
                 .toggleStyle(.button)
                 
@@ -517,9 +507,9 @@ struct ExperimentView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("歩行者の進行方向")
+                Text("Pedestrian Direction")
                     .font(.subheadline.bold())
-                Picker("進行方向", selection: $panelModel.pedestrianDirectionMode) {
+                Picker("Direction", selection: $panelModel.pedestrianDirectionMode) {
                     ForEach(PanelModel.PedestrianDirectionMode.allCases) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
@@ -529,9 +519,9 @@ struct ExperimentView: View {
             .padding(.vertical, 4)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("歩行アルゴリズム")
+                Text("Walking Algorithm")
                     .font(.subheadline.bold())
-                Picker("アルゴリズム", selection: $panelModel.pedestrianAlgorithm) {
+                Picker("Algorithm", selection: $panelModel.pedestrianAlgorithm) {
                     ForEach(PanelModel.PedestrianAlgorithm.allCases) { algo in
                         Text(algo.rawValue).tag(algo)
                     }
@@ -541,12 +531,12 @@ struct ExperimentView: View {
             .padding(.vertical, 4)
 
             VStack(alignment: .leading) {
-                Text(String(format: "移動速度倍率: x%.1f", panelModel.peopleSpeedMultiplier))
+                Text(String(format: "Speed Multiplier: x%.1f", panelModel.peopleSpeedMultiplier))
                 Slider(value: $panelModel.peopleSpeedMultiplier, in: 0.2...3.0)
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("歩行者混雑度プリセット (Fruin's LOS基準)")
+                Text("Pedestrian Density Preset (Fruin's LOS)")
                     .font(.subheadline.bold())
                 Picker("Density", selection: Binding(
                     get: {
@@ -579,42 +569,42 @@ struct ExperimentView: View {
                 }
                 .pickerStyle(.segmented)
                 
-                Text(String(format: "※目標値 (幅 %.1fm, 速度 %.2fm/s):", width, avgVelocity))
+                Text(String(format: "* Target (Width %.1fm, Speed %.2fm/s):", width, avgVelocity))
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
-                Text(String(format: "A: %.1f秒 | B: %.1f秒 | C: %.1f秒 | D: %.1f秒 | E: %.1f秒 | F: %.1f秒", panelModel.tA, panelModel.tB, panelModel.tC, panelModel.tD, panelModel.tE, panelModel.tF))
+                Text(String(format: "A: %.1fs | B: %.1fs | C: %.1fs | D: %.1fs | E: %.1fs | F: %.1fs", panelModel.tA, panelModel.tB, panelModel.tC, panelModel.tD, panelModel.tE, panelModel.tF))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
 
             VStack(alignment: .leading) {
-                Text(String(format: "出現間隔（平均）: %.1f 秒", panelModel.peopleSpawnInterval))
+                Text(String(format: "Spawn Interval (avg): %.1f s", panelModel.peopleSpawnInterval))
                 Slider(value: $panelModel.peopleSpawnInterval, in: 0.3...10.0)
             }
 
             VStack(alignment: .leading) {
-                Text(String(format: "左右範囲（レーンの広がり）: %.1f m", panelModel.peopleHorizontalRange))
+                Text(String(format: "Horizontal Range (lane spread): %.1f m", panelModel.peopleHorizontalRange))
                 Slider(value: $panelModel.peopleHorizontalRange, in: 0.5...6.0)
             }
 
             VStack(alignment: .leading) {
-                Text(String(format: "高さオフセット: %.2f m", panelModel.peopleHeightOffset))
+                Text(String(format: "Height Offset: %.2f m", panelModel.peopleHeightOffset))
                 Slider(value: $panelModel.peopleHeightOffset, in: -1.0...0.0)
             }
 
             Divider().padding(.vertical, 6)
 
             VStack(alignment: .leading, spacing: 12) {
-                Text("Spawn Line（中心線の長さ・角度・位置）")
+                Text("Spawn Line (Length / Angle / Position)")
                     .font(.subheadline.bold())
 
-                GroupBox("長さと角度の微調整") {
+                GroupBox("Length & Angle Fine-Tuning") {
                     VStack(alignment: .leading, spacing: 12) {
                         // Length Row
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text(String(format: "長さ (L): %.2f m", panelModel.spawnLineLength))
+                                Text(String(format: "Length (L): %.2f m", panelModel.spawnLineLength))
                                     .font(.subheadline.bold())
                                 Spacer()
                                 TextField("", value: $panelModel.spawnLineLength, format: .number)
@@ -639,7 +629,7 @@ struct ExperimentView: View {
                         // Angle Row
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text(String(format: "角度 (A): %.1f °", panelModel.spawnLineAngleDegrees))
+                                Text(String(format: "Angle (A): %.1f °", panelModel.spawnLineAngleDegrees))
                                     .font(.subheadline.bold())
                                 Spacer()
                                 TextField("", value: $panelModel.spawnLineAngleDegrees, format: .number)
@@ -661,12 +651,12 @@ struct ExperimentView: View {
                     }
                 }
 
-                GroupBox("位置 (ワールド座標) の微調整") {
+                GroupBox("Position (World Coordinates) Fine-Tuning") {
                     VStack(alignment: .leading, spacing: 12) {
                         // Translation X Row
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text(String(format: "平行移動 X: %.2f m", panelModel.spawnLineCenterX))
+                                Text(String(format: "Translate X: %.2f m", panelModel.spawnLineCenterX))
                                     .font(.subheadline.bold())
                                 Spacer()
                                 TextField("", value: $panelModel.spawnLineCenterX, format: .number)
@@ -691,7 +681,7 @@ struct ExperimentView: View {
                         // Translation Z Row
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text(String(format: "平行移動 Z: %.2f m", panelModel.spawnLineCenterZ))
+                                Text(String(format: "Translate Z: %.2f m", panelModel.spawnLineCenterZ))
                                     .font(.subheadline.bold())
                                 Spacer()
                                 TextField("", value: $panelModel.spawnLineCenterZ, format: .number)
@@ -782,7 +772,7 @@ private struct LOSCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("混雑度 (LOS)")
+            Text("Density (LOS)")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

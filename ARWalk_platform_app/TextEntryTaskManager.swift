@@ -102,7 +102,7 @@ final class TextEntryTaskManager: ObservableObject, ExperimentalSubTask {
                     elapsedTime: elapsedTime,
                     eventType: "text_entry_miss",
                     taskType: .textEntry,
-                    rule: "指定文字列を入力",
+                    rule: "Text entry",
                     isCorrect: "false",
                     detail1: prompt.targetText,
                     detail2: prompt.enteredText
@@ -140,7 +140,7 @@ final class TextEntryTaskManager: ObservableObject, ExperimentalSubTask {
                 elapsedTime: elapsedTime,
                 eventType: "text_entry_spawn",
                 taskType: .textEntry,
-                rule: "指定文字列を入力",
+                rule: "Text entry",
                 detail1: target
             )
         )
@@ -179,7 +179,7 @@ final class TextEntryTaskManager: ObservableObject, ExperimentalSubTask {
                 elapsedTime: elapsedTime,
                 eventType: isCorrect ? "text_entry_correct" : "text_entry_wrong",
                 taskType: .textEntry,
-                rule: "指定文字列を入力",
+                rule: "Text entry",
                 isCorrect: isCorrect ? "true" : "false",
                 reactionTime: Date().timeIntervalSince(prompt.spawnedAt),
                 detail1: currentTargetText,

@@ -84,7 +84,7 @@ final class SelectiveAttentionTaskManager: ObservableObject, ExperimentalSubTask
     }
 
     var ruleDescription: String {
-        "緑の HIT だけを叩く"
+        "Tap only green HIT targets"
     }
 
     @discardableResult

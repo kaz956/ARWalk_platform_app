@@ -121,6 +121,10 @@ struct TaskMetricSummary {
     var correctCount: Int = 0
     var wrongCount: Int = 0
     var missCount: Int = 0
+    var maxCombo: Int = 0
+    var currentCombo: Int = 0
+    var missedTaps: Int = 0
+    var backtrackCount: Int = 0
 }
 
 @MainActor
@@ -205,18 +209,18 @@ final class ExperimentTaskManager: ObservableObject {
 
     var conditionName: String {
         switch conditionNumber {
-        case 1: return "ベースライン"
-        case 2: return "縦画面"
-        case 3: return "小"
-        case 4: return "大"
+        case 1: return "Baseline"
+        case 2: return "Portrait"
+        case 3: return "Small"
+        case 4: return "Large"
         case 5: return "0%"
         case 6: return "100%"
-        case 7: return "右"
-        case 8: return "左"
-        case 9: return "上"
-        case 10: return "下"
-        case 11: return "手前"
-        case 12: return "奥"
+        case 7: return "Right"
+        case 8: return "Left"
+        case 9: return "Up"
+        case 10: return "Down"
+        case 11: return "Near"
+        case 12: return "Far"
         default: return ""
         }
     }
@@ -318,11 +322,14 @@ final class ExperimentTaskManager: ObservableObject {
         resetArcadeMetrics()
         resetTaskMetrics()
         resetSummaryMetrics()
-        exportedSessionFile = nil
         exportedSummaryFile = nil
         hasIncrementedForCurrentRun = false
         isCSVSaved = false
         lastSummaryRule = activeRuleSummary(for: visibleTaskTypes)
+        
+        for t in visibleTaskTypes {
+            taskMetrics[t] = TaskMetricSummary()
+        }
 
         let startDate = Date()
         let metadata = ExperimentMetadata(
@@ -496,6 +503,15 @@ final class ExperimentTaskManager: ObservableObject {
             return
         }
 
+        if entityName.hasPrefix("Background_") {
+            if visibleTaskTypes(from: panelModel).contains(.arcade) {
+                var sum = taskMetrics[.arcade] ?? TaskMetricSummary()
+                sum.missedTaps += 1
+                taskMetrics[.arcade] = sum
+            }
+            return
+        }
+
         if entityName.hasPrefix("AttentionTarget."),
            let id = UUID(uuidString: entityName.replacingOccurrences(of: "AttentionTarget.", with: "")) {
             if selectiveAttentionTaskManager.handleTap(targetID: id, elapsedTime: liveElapsedTime) {
@@ -651,13 +667,12 @@ final class ExperimentTaskManager: ObservableObject {
     private func generateSummaryCSV() throws -> URL? {
         guard let metadata = experimentMetadata else { return nil }
         
-        let textMetrics = taskMetrics[.textEntry] ?? TaskMetricSummary()
-        let completedCount = textMetrics.correctCount
-        
-        let avgKeyPressesPerSecond = elapsedTime > 0 ? Double(inputKeyPressCount) / elapsedTime : 0
-        let avgKeyPressTime = inputKeyPressIntervals.isEmpty ? 0 : inputKeyPressIntervals.reduce(0, +) / Double(inputKeyPressIntervals.count)
-        
-        let avgPromptTime = textMetrics.responseCount > 0 ? textMetrics.responseTimeSum / Double(textMetrics.responseCount) : 0
+        var headers: [String] = [
+            "ParticipantID", "ConditionID", "LOS", "Timestamp",
+            "TotalTaskDuration(s)", "IMU_Accel_SD", 
+            "TotalCollisionCount", "BodyOnlyCollisionCount", "HandOnlyCollisionCount", "BothCollisionCount",
+            "LeftHandHitCount", "RightHandHitCount"
+        ]
         
         // IMU SD calculation from MotionRecorder
         let stats = motionRecorder.getStats()
@@ -668,38 +683,71 @@ final class ExperimentTaskManager: ObservableObject {
             imuSD = sqrt(max(0, variance))
         }
 
-        let headers = [
-            "ParticipantID", "ConditionID", "LOS", "Timestamp",
-            "TotalTaskDuration(s)",
-            "CompletedPrompts", "TotalKeyPresses", "AvgKeyPressesPerSecond(KPS)",
-            "AvgKeyPressInterval", "AvgPromptCompletionTime", "DelPressCount",
-            "IMU_Accel_SD", "TotalCollisionCount", "HandOnlyCollisionCount", "BothCollisionCount",
-            "LeftHandHitCount", "RightHandHitCount"
-        ]
-        
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd_HHmmss"
         let timestamp = formatter.string(from: metadata.startedAt)
         
-        let dataRow = [
+        var dataRow: [String] = [
             metadata.participantID,
             metadata.conditionID,
             metadata.los,
             timestamp,
             String(format: "%.2f", elapsedTime),
-            "\(completedCount)",
-            "\(inputKeyPressCount)",
-            String(format: "%.2f", avgKeyPressesPerSecond),
-            String(format: "%.4f", avgKeyPressTime),
-            String(format: "%.4f", avgPromptTime),
-            "\(inputDelPressCount)",
             String(format: "%.6f", imuSD),
             "\(collisionCount)",
+            "\(collisionCount - handOnlyCollisionCount - bothCollisionCount)",
             "\(handOnlyCollisionCount)",
             "\(bothCollisionCount)",
             "\(leftHandHitCount)",
             "\(rightHandHitCount)"
         ]
+        
+        let sortedTasks = taskMetrics.keys.sorted(by: { $0.rawValue < $1.rawValue })
+        
+        for task in sortedTasks {
+            let summary = taskMetrics[task]!
+            let prefix = task.rawValue
+            
+            headers.append(contentsOf: [
+                "\(prefix)_Correct", "\(prefix)_Wrong", "\(prefix)_Miss", "\(prefix)_AvgResponseTime(s)"
+            ])
+            
+            let avgTime = summary.responseCount > 0 ? summary.responseTimeSum / Double(summary.responseCount) : 0
+            
+            dataRow.append(contentsOf: [
+                "\(summary.correctCount)",
+                "\(summary.wrongCount)",
+                "\(summary.missCount)",
+                String(format: "%.4f", avgTime)
+            ])
+            
+            if task == .arcade || task == .nBack {
+                headers.append("\(prefix)_MaxCombo")
+                dataRow.append("\(summary.maxCombo)")
+            }
+            if task == .arcade {
+                headers.append("\(prefix)_MissedTaps")
+                dataRow.append("\(summary.missedTaps)")
+            }
+            if task == .pageExplore {
+                headers.append(contentsOf: ["\(prefix)_AvgExplorationTime(s)", "\(prefix)_BacktrackCount"])
+                dataRow.append(contentsOf: [String(format: "%.4f", avgTime), "\(summary.backtrackCount)"])
+            }
+            
+            if task == .textEntry {
+                headers.append(contentsOf: [
+                    "\(prefix)_TotalKeyPresses", "\(prefix)_AvgKPS", "\(prefix)_AvgKeyInterval(s)", "\(prefix)_DelPressCount"
+                ])
+                let avgKeyPressesPerSecond = elapsedTime > 0 ? Double(inputKeyPressCount) / elapsedTime : 0
+                let avgKeyPressTime = inputKeyPressIntervals.isEmpty ? 0 : inputKeyPressIntervals.reduce(0, +) / Double(inputKeyPressIntervals.count)
+                dataRow.append(contentsOf: [
+                    "\(inputKeyPressCount)",
+                    String(format: "%.2f", avgKeyPressesPerSecond),
+                    String(format: "%.4f", avgKeyPressTime),
+                    "\(inputDelPressCount)"
+                ])
+            }
+        }
 
         let csvContent = headers.joined(separator: ",") + "\n" + dataRow.joined(separator: ",")
         
@@ -774,10 +822,10 @@ final class ExperimentTaskManager: ObservableObject {
     private func activeRuleSummary(for visibleTaskTypes: Set<ExperimentalTaskType>) -> String {
         var rules: [String] = []
         if visibleTaskTypes.contains(.arcade) { rules.append(arcadeRuleDescription) }
-        if visibleTaskTypes.contains(.arithmetic) { rules.append("4択で計算に回答") }
-        if visibleTaskTypes.contains(.textEntry) { rules.append("指定文字列を入力") }
-        if visibleTaskTypes.contains(.pageExplore) { rules.append("リンクを辿って目標ページへ到達") }
-        if visibleTaskTypes.contains(.nBack) { rules.append("\(nBackConfig.nValue)-back で一致判定") }
+        if visibleTaskTypes.contains(.arithmetic) { rules.append("Answer 4-choice arithmetic") }
+        if visibleTaskTypes.contains(.textEntry) { rules.append("Enter the specified text") }
+        if visibleTaskTypes.contains(.pageExplore) { rules.append("Follow links to reach the goal page") }
+        if visibleTaskTypes.contains(.nBack) { rules.append("Determine matches with \(nBackConfig.nValue)-back") }
         return rules.joined(separator: " / ")
     }
 
@@ -874,12 +922,22 @@ final class ExperimentTaskManager: ObservableObject {
             summary.responseCount += 1
         }
         switch payload.eventType {
-        case "correct_tap", "arithmetic_correct", "text_entry_correct", "page_goal", "nback_correct":
+        case "correct", "arithmetic_correct", "text_entry_correct", "page_correct", "nback_correct", "correct_tap":
             summary.correctCount += 1
-        case "wrong_tap", "arithmetic_wrong", "text_entry_wrong", "nback_wrong":
+            summary.currentCombo += 1
+            summary.maxCombo = max(summary.maxCombo, summary.currentCombo)
+        case "wrong", "arithmetic_wrong", "text_entry_wrong", "page_wrong", "nback_wrong", "wrong_tap":
             summary.wrongCount += 1
+            summary.currentCombo = 0
+            if payload.eventType == "page_wrong" {
+                summary.backtrackCount += 1
+            }
         case "miss", "arithmetic_miss", "text_entry_miss", "page_miss", "nback_miss":
             summary.missCount += 1
+            summary.currentCombo = 0
+            if payload.taskType == .arcade {
+                summary.missedTaps += 1
+            }
         default:
             break
         }

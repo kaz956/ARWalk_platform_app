@@ -440,12 +440,14 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "$(TARGET_NAME)/Info.plist";
+				INFOPLIST_KEY_NSHandsTrackingUsageDescription = "Used to track hand positions and perform collision detection between hands and pedestrians.";
+				INFOPLIST_KEY_NSWorldSensingUsageDescription = "Used to track the user's position and orientation during walking to perform collision detection.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.KazukiIchii.test;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.KazukiIchii.arwalk-platform";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "xros xrsimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -465,12 +467,14 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "$(TARGET_NAME)/Info.plist";
+				INFOPLIST_KEY_NSHandsTrackingUsageDescription = "Used to track hand positions and perform collision detection between hands and pedestrians.";
+				INFOPLIST_KEY_NSWorldSensingUsageDescription = "Used to track the user's position and orientation during walking to perform collision detection.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.KazukiIchii.test;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.KazukiIchii.arwalk-platform";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "xros xrsimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
